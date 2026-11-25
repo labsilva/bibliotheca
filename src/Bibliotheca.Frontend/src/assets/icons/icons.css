@@ -1,0 +1,24 @@
+/* Estilo base para o ícone */
+.app-icon {
+  display: inline-block;
+  vertical-align: middle;
+  width: 1em;
+  height: 1em;
+
+  /* a cor do ícone vem do texto */
+  color: inherit;
+  background-color: currentColor;
+
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+/* Ícone da prateleira com livros */
+.app-icon--shelf-books {
+  -webkit-mask-image: url('./shelf-books.svg');
+  mask-image: url('./shelf-books.svg');
+}

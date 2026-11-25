@@ -1,0 +1,28 @@
+@baseUrl = https://localhost:5501
+@accessToken = replace-with-local-access-token
+
+### Search external editions
+GET {{baseUrl}}/api/external-editions/search?title=Matilda&author=Roald%20Dahl
+Authorization: Bearer {{accessToken}}
+
+### List provider statuses
+GET {{baseUrl}}/api/external-editions/providers
+Authorization: Bearer {{accessToken}}
+
+### Queue an edition for import
+POST {{baseUrl}}/api/external-editions/import
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "providerId": "openLibrary",
+  "externalId": "OL7353617M",
+  "shelfId": null
+}
+
+### Missing title returns 400
+GET {{baseUrl}}/api/external-editions/search
+Authorization: Bearer {{accessToken}}
+
+### Anonymous provider status returns 401
+GET {{baseUrl}}/api/external-editions/providers

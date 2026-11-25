@@ -1,0 +1,17 @@
+@baseUrl = https://localhost:5500
+@accessToken = replace-with-current-access-token
+
+### Current invitation permission
+GET {{baseUrl}}/api/account/permissions
+Authorization: Bearer {{accessToken}}
+
+### Administrator creates an expiring single-use invitation
+POST {{baseUrl}}/api/account/invite-code
+Authorization: Bearer {{accessToken}}
+
+### Anonymous search must return 401
+GET {{baseUrl}}/api/search?text=private
+
+### Search includes only the current reader's shelf names
+GET {{baseUrl}}/api/search?text=private
+Authorization: Bearer {{accessToken}}

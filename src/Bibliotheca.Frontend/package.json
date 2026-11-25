@@ -1,0 +1,52 @@
+{
+  "name": "bibliotheca-frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || ^26.13.1"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^7.3.1",
+    "@fortawesome/free-brands-svg-icons": "^7.3.1",
+    "@fortawesome/free-regular-svg-icons": "^7.3.1",
+    "@fortawesome/free-solid-svg-icons": "^7.3.1",
+    "@fortawesome/vue-fontawesome": "^3.3.3",
+    "@microsoft/signalr": "^11.0.0",
+    "@zxing/browser": "^0.2.1",
+    "axios": "^1.21.1",
+    "echarts": "^6.1.0",
+    "moment": "^2.31.0",
+    "oidc-client-ts": "^3.5.0",
+    "pinia": "^4.1.0",
+    "primeicons": "^8.0.2",
+    "vue": "^3.5.45",
+    "vue-barcode-reader": "^1.0.3",
+    "vue-echarts": "^8.3.2",
+    "vue-router": "^5.5.1"
+  },
+  "overrides": {
+    "editorconfig": { "minimatch": "11.0.9" },
+    "js-beautify": { "glob": "14.0.6" },
+    "workbox-build": { "glob": "14.0.6" }
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "@vitest/coverage-v8": "5.1.1",
+    "@vue/test-utils": "^2.6.0",
+    "jsdom": "^31.0.1",
+    "vite": "^8.3.8",
+    "vite-plugin-pwa": "^2.0.0",
+    "vite-plugin-vue-devtools": "^8.2.1",
+    "vitest": "5.1.1"
+  }
+}

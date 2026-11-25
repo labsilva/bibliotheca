@@ -1,0 +1,7 @@
+@baseUrl = https://books.example.org
+
+### Database readiness after application initialization
+GET {{baseUrl}}/api/health
+
+### Public OIDC metadata must use the public HTTPS origin
+GET {{baseUrl}}/.well-known/openid-configuration

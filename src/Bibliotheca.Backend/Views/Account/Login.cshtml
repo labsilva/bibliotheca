@@ -1,0 +1,198 @@
+﻿@model Bibliotheca.Backend.Models.LoginViewModel
+@{
+    Layout = null; // standalone
+    ViewData["Title"] = "Iniciar sessão — Bibliotheca";
+}
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0ea5ff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>@ViewData["Title"]</title>
+
+    <!-- Manifest / Ícones PWA (opcional) -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-icon-180.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="/pwa-192x192.png">
+    <link rel="apple-touch-icon" sizes="512x512" href="/pwa-512x512.png">
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+
+    <style>
+        :root{
+            --bg-1:#050611; --bg-2:#0b0e1e;
+            --neon:#1ec8ff; --neon-2:#74e2ff;
+            --text:#e7f5ff; --muted:#94a3b8; --error:#ff6b6b;
+            --card:#0b1022aa; --radius:18px;
+            --shadow:0 10px 30px rgba(0,0,0,.6);
+            --ring:0 0 22px 6px rgba(30,200,255,.25), 0 0 60px 18px rgba(30,200,255,.12);
+        }
+        *{box-sizing:border-box}
+        html,body{height:100%}
+        body{
+            margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans";
+            color:var(--text);
+            background:
+                radial-gradient(1200px 600px at 80% -10%, rgba(30,200,255,.12), transparent 60%),
+                radial-gradient(900px 500px at -10% 90%, rgba(30,200,255,.08), transparent 60%),
+                linear-gradient(180deg, var(--bg-1), var(--bg-2));
+            -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+        }
+        .wrap{
+            min-height:100%;
+            padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+            display:grid; place-items:center;
+        }
+        .card{
+            width:min(100%, 520px);
+            background:linear-gradient(180deg, rgba(14,22,45,.7), rgba(8,12,26,.65));
+            border:1px solid rgba(116,226,255,.18);
+            backdrop-filter: blur(16px) saturate(120%);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding:clamp(18px, 4vw, 34px);
+            position:relative;
+        }
+        .card::before{
+            content:""; position:absolute; inset:-2px; z-index:-1;
+            border-radius: calc(var(--radius) + 2px);
+            background: radial-gradient(60% 60% at 50% 0%, rgba(30,200,255,.35), transparent 70%),
+                        linear-gradient(180deg, rgba(30,200,255,.25), rgba(30,200,255,0));
+            filter: blur(14px);
+        }
+        .brand{ display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center; margin-bottom: 18px; }
+        .brand img{
+            width:min(34vw, 120px); height:auto; display:block;
+            filter: drop-shadow(0 0 16px rgba(30,200,255,.6)) drop-shadow(0 0 34px rgba(30,200,255,.25));
+        }
+        .brand h1{
+            margin:0; font-size: clamp(22px, 4.4vw, 30px); font-weight:700; letter-spacing:.4px;
+            background: linear-gradient(180deg, var(--neon-2), #c8f3ff);
+            -webkit-background-clip:text; background-clip:text; color:transparent;
+            text-shadow: 0 0 8px rgba(30,200,255,.35);
+        }
+        .subtitle{ margin:2px 0 8px; color:var(--muted); font-size: clamp(12px, 2.4vw, 14px); }
+        form{ display:grid; gap:14px; margin-top: 6px; }
+        .field{ display:grid; gap:8px; }
+        label{ font-size:14px; color:#b7d8ea; }
+        .control{ position:relative; }
+        input[type="text"], input[type="password"]{
+            width:100%; padding:14px 44px 14px 14px; border-radius:14px;
+            border:1px solid rgba(116,226,255,.25); background: rgba(4,10,24,.65);
+            color:var(--text); outline:none;
+            box-shadow: inset 0 0 0 1px rgba(30,200,255,.08);
+            transition: border-color .18s, box-shadow .18s, transform .05s;
+            caret-color: var(--neon);
+        }
+        input::placeholder{ color:#7aa6bd; }
+        input:focus{ border-color: rgba(116,226,255,.6); box-shadow: var(--ring); }
+        .toggle-visibility{
+            position:absolute; right:8px; top:50%; transform:translateY(-50%);
+            background:transparent; border:none; color:#bdefff; cursor:pointer; padding:8px; border-radius:10px;
+        }
+        .toggle-visibility:focus-visible{ outline:2px solid var(--neon); outline-offset:3px; }
+        .row{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+        .remember{ display:flex; align-items:center; gap:10px; color:#bfe9ff; font-size:14px; }
+        .remember input{ width:18px; height:18px; accent-color:#25c3ff; }
+        .forgot a{ color:#9be7ff; text-decoration:none; font-size:14px; }
+        .forgot a:hover{ text-decoration:underline; }
+        .actions{ display:flex; flex-direction:column; gap:12px; margin-top:6px; }
+        .btn-primary{
+            appearance:none; border:none; cursor:pointer;
+            padding:14px 16px; border-radius:14px; font-weight:700; letter-spacing:.2px;
+            color:#001018; background: linear-gradient(180deg, #56d9ff, #0ea5ff);
+            box-shadow: 0 10px 24px rgba(14,165,255,.35), inset 0 0 12px rgba(255,255,255,.25);
+            transition: transform .06s, filter .2s, box-shadow .2s;
+        }
+        .btn-primary:hover{ filter:brightness(1.07); }
+        .btn-primary:active{ transform: translateY(1px) scale(.997); }
+        .btn-primary:focus-visible{ outline:2px solid #9be7ff; outline-offset:3px; }
+        .validation{ color:var(--error); background: rgba(255,107,107,.08);
+            border:1px solid rgba(255,107,107,.35); padding:10px 12px; border-radius:12px; font-size:14px; display:none; }
+        .validation.show{ display:block; }
+        footer.meta{ margin-top:12px; text-align:center; color:#87b9cc; font-size:12px; opacity:.9; }
+        @@media (max-width:420px)
+        { 
+            .card{ padding:16px; border-radius:16px; } 
+            .remember span{ font-size:13px; } 
+        }
+        @@media (max-width:768px){
+            .wrap{
+                min-height: 50%;
+                padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+                display:grid; place-items:center;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <main class="card" role="main" aria-labelledby="appTitle">
+        <div class="brand">
+            <img src="~/img/Bibliotheca-Logo-Transparent.png" alt="Logótipo Bibliotheca" width="128" height="128" />
+            <h1 id="appTitle">Bibliotheca</h1>
+            <p class="subtitle">Iniciar sessão</p>
+        </div>
+
+        @if (!string.IsNullOrEmpty(Model.ErrorMessage))
+        {
+            <div class="validation show" aria-live="polite">
+                @Model.ErrorMessage
+            </div>
+        }
+
+        <form method="post" asp-route-returnUrl="@Model.ReturnUrl">
+            @Html.AntiForgeryToken()
+
+            <div class="field">
+                <label for="username">Nome de utilizador</label>
+                <div class="control">
+                    <input id="username" name="Username" type="text" autocomplete="username"
+                           placeholder="ex.: joao.silva" required value="@Model.Username" />
+                </div>
+            </div>
+
+            <div class="field">
+                <label for="password">Palavra-passe</label>
+                <div class="control">
+                    <input id="password" name="Password" type="password" autocomplete="current-password"
+                           placeholder="••••••••" required />
+                    <button class="toggle-visibility" type="button" aria-label="Mostrar/ocultar palavra-passe"
+                            onclick="(function(btn){ const inp=btn.previousElementSibling; const t=inp.type==='password'?'text':'password'; inp.type=t; btn.setAttribute('aria-pressed', t==='text'); })(this)">
+                        👁
+                    </button>
+                </div>
+            </div>
+
+            <div class="row">
+                <label class="remember">
+                    <input type="checkbox" name="RememberMe" value="true" @(Model.RememberMe ? "checked" : "") />
+                    <span>Manter sessão iniciada</span>
+                </label>
+                <div class="forgot"><a href="#" onclick="alert('Recuperação de senha a configurar.');return false;">Esqueceste-te da palavra-passe?</a></div>
+            </div>
+
+            <div class="actions">
+                <button class="btn-primary" type="submit">Entrar</button>
+            </div>
+        </form>
+
+        <footer class="meta">© @DateTime.UtcNow.Year Bibliotheca</footer>
+    </main>
+</div>
+<script type="text/javascript">
+        const getSHA256Hash = async (input) => {
+          const textAsBuffer = new TextEncoder().encode(input);
+          const hashBuffer = await window.crypto.subtle.digest("SHA-256", textAsBuffer);
+          const hashArray = Array.from(new Uint8Array(hashBuffer));
+          const hash = hashArray
+            .map((item) => item.toString(16).padStart(2, "0"))
+            .join("");
+          return hash;
+        };
+</script>
+</body>
+</html>

@@ -354,6 +354,19 @@ test('a live scan queues a batch and reopens its persisted progress on mobile', 
     const frame = canvas.getContext('2d')
     const stream = canvas.captureStream(15)
     Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: async () => stream })
+    let modules
+    function drawBarcode() {
+      if (modules) {
+        frame.fillStyle = 'white'
+        frame.fillRect(0, 0, canvas.width, canvas.height)
+        frame.fillStyle = 'black'
+        for (let i = 0; i < modules.length; i++) {
+          if (modules[i] === '1') frame.fillRect((i + 12) * 4, 10, 4, 155)
+        }
+      }
+      requestAnimationFrame(drawBarcode)
+    }
+    requestAnimationFrame(drawBarcode)
     window.showTestBarcode = isbn => {
       const left = ['0001101', '0011001', '0010011', '0111101', '0100011', '0110001', '0101111', '0111011', '0110111', '0001011']
       const invert = bits => [...bits].map(bit => bit === '1' ? '0' : '1').join('')
@@ -362,11 +375,7 @@ test('a live scan queues a batch and reopens its persisted progress on mobile', 
         'LGGLGL'[i] === 'L' ? left[digit] : [...invert(left[digit])].reverse().join(''),
       ).join('')
       const rightCode = digits.slice(7).map(digit => invert(left[digit])).join('')
-      const modules = '101' + leftCode + '01010' + rightCode + '101'
-      frame.fillStyle = 'white'
-      frame.fillRect(0, 0, canvas.width, canvas.height)
-      frame.fillStyle = 'black'
-      for (let i = 0; i < modules.length; i++) if (modules[i] === '1') frame.fillRect((i + 12) * 4, 10, 4, 155)
+      modules = '101' + leftCode + '01010' + rightCode + '101'
     }
   })
   const imports = []

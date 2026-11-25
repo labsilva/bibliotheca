@@ -180,16 +180,16 @@ public class CatalogueTests
         await using var db = await CreateDatabaseAsync();
         var (book, alice, _) = await SeedBookAsync(db);
         var storedBook = await db.Books.Include(row => row.Authors).SingleAsync();
-        storedBook.Title = "¡rvore";
-        Assert.Single(storedBook.Authors!).AuthorName = "Jo„o ¡rvore";
+        storedBook.Title = "√Årvore";
+        Assert.Single(storedBook.Authors!).AuthorName = "Jo√£o √Årvore";
         var shelf = await db.Shelves.SingleAsync(row => row.UserId == alice.UserId);
-        shelf.ShelveName = "Leituras ¡rvore";
-        db.BookSeries.Add(new BookSeries { Name = "¡rvore Collection" });
+        shelf.ShelveName = "Leituras √Årvore";
+        db.BookSeries.Add(new BookSeries { Name = "√Årvore Collection" });
         db.Collections.Add(new Collection { Name = "arvore editions" });
         await db.SaveChangesAsync();
         var controller = new SearchController { ControllerContext = ContextFor("alice") };
 
-        var result = Assert.IsType<OkObjectResult>(await controller.SearchAsync(db, "¡RVORE", default));
+        var result = Assert.IsType<OkObjectResult>(await controller.SearchAsync(db, "√ÅRVORE", default));
         var matches = Assert.IsAssignableFrom<IEnumerable<SearchController.SearchResultItem>>(result.Value).ToArray();
 
         Assert.Equal(new[] { "Author", "Book", "Collection", "Series", "Shelve" }, matches.Select(item => item.Area).Order());
@@ -207,12 +207,12 @@ public class CatalogueTests
         var tags = new TagsController();
         var books = BooksControllerFor("alice");
 
-        Assert.IsType<OkObjectResult>(await tags.CreateTagAsync(db, new("FicÁ„o"), default));
+        Assert.IsType<OkObjectResult>(await tags.CreateTagAsync(db, new("Fic√ß√£o"), default));
         var tag = await db.Tags.SingleAsync();
         Assert.Equal("ficcao", tag.TagSearch);
         Assert.IsType<OkResult>(await books.AddTagAsync(db, book.BookId, new(tag.TagId), default));
 
-        var search = Assert.IsType<JsonResult>(await tags.SearchTagsAsync(db, "FIC«√O", default));
+        var search = Assert.IsType<JsonResult>(await tags.SearchTagsAsync(db, "FIC√á√ÉO", default));
         Assert.Equal(tag.TagId, Assert.Single(Assert.IsType<BookTag[]>(search.Value)).TagId);
         var details = Assert.IsType<OkObjectResult>(await tags.DetailsAsync(db, tag.TagId, default));
         Assert.Equal(book.BookId, Assert.Single(Assert.IsType<TagDetailsModel>(details.Value).Books).Id);

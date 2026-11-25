@@ -202,10 +202,10 @@ public class Program
                        .SetEndSessionEndpointUris("/connect/logout")
                        .SetUserInfoEndpointUris("/connect/userinfo") // opcional
                        ;
-                // Scopes padrão
+                // Scopes padrÃ£o
                 options.RegisterScopes(Scopes.OpenId, Scopes.Profile, Scopes.Email, Scopes.OfflineAccess);
 
-                // Autenticação do utilizador feita via Cookie
+                // AutenticaÃ§Ã£o do utilizador feita via Cookie
                 options.UseAspNetCore()
                        .EnableAuthorizationEndpointPassthrough()
                        .EnableTokenEndpointPassthrough()
@@ -224,11 +224,11 @@ public class Program
                     options.AddSigningCertificate(signingCertificate!);
                 }
 
-                // Tokens (JWT ou referência). Aqui JWT auto-assinado.
+                // Tokens (JWT ou referÃªncia). Aqui JWT auto-assinado.
 
-                // Subject do utilizador virá das ClaimsName/Subject (ver AccountController)
+                // Subject do utilizador virÃ¡ das ClaimsName/Subject (ver AccountController)
             })
-            // Validação (se precisares validar tokens no mesmo serviço/API)
+            // ValidaÃ§Ã£o (se precisares validar tokens no mesmo serviÃ§o/API)
             .AddValidation(options =>
             {
                 options.UseLocalServer();

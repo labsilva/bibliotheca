@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Bibliotheca.Backend/Bibliotheca.Backend.csproj" Id="37d9c116-1179-4b0c-bcde-7184c7582a12" />
+  <Project Path="tests/Bibliotheca.Backend.Tests/Bibliotheca.Backend.Tests.csproj" />
+</Solution>

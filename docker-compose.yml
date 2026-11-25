@@ -1,0 +1,100 @@
+services:
+  api:
+    image: ghcr.io/labsilva/bibliotheca/bibliotheca-api:${BIBLIOTHECA_IMAGE_TAG:-latest}
+    entrypoint: "/app/Bibliotheca.Backend"
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_HTTP_PORT:-5500}:5500"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+     ConnectionStrings__SQLiteDefault: "Data Source=/app/data/Bibliotheca.db"
+     Playwright__Remote: "http://browser-control:8080/endpoint"
+     Fetchers__SaveTempFiles: "false"
+     Fetchers__TempFilesSaveLocation: "/app/temp/"
+     Authentication__DataProtectionKeyPath: /app/data/keys
+    volumes:
+      - ./data:/app/data/
+      - ./temp:/app/temp/
+      - ./cert:/app/cert/:ro
+      - ./appsettings.json:/app/appsettings.json:ro
+    networks:
+      - default
+      - browser-control
+    depends_on:
+      browser-control:
+        condition: service_healthy
+  web:
+    image: ghcr.io/labsilva/bibliotheca/bibliotheca-web:${BIBLIOTHECA_IMAGE_TAG:-latest}
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_HTTP_PORT:-8080}:80"
+    restart: unless-stopped
+    environment:
+     API_URL: "${API_PUBLIC_URL:-https://api.example.org}"
+     VUE_APP_VITE_OIDC_AUTHORITY: "${API_PUBLIC_URL:-https://api.example.org}"
+     VUE_APP_VITE_OIDC_CLIENT_ID: "bibliotheca-web"
+     VUE_APP_VITE_OIDC_REDIRECT_URI: "${WEB_PUBLIC_URL:-https://books.example.org}/oidc-callback"
+     VUE_APP_VITE_OIDC_POST_LOGOUT_REDIRECT_URI: "${WEB_PUBLIC_URL:-https://books.example.org}/"
+     VUE_APP_VITE_OIDC_SCOPE: "openid profile email offline_access"
+     VUE_APP_VITE_OIDC_SILENT_REDIRECT_URI: "${WEB_PUBLIC_URL:-https://books.example.org}/oidc-silent-renew"
+  playwright:
+    image: ${BIBLIOTHECA_PLAYWRIGHT_IMAGE:-bibliotheca-playwright:1.65.1}
+    build:
+      context: ./docker/playwright
+    networks:
+      - browser
+    restart: unless-stopped
+    init: true
+    read_only: true
+    # Chromium profiles, Xvfb sockets and caches are disposable. Keep executable
+    # code immutable even if the browser's unprivileged account is compromised.
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m
+      - /home/pwuser:rw,nosuid,nodev,size=64m,uid=1001,gid=1001,mode=0700
+    shm_size: 512mb
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/playwright/seccomp.json
+    environment:
+      PLAYWRIGHT_EGRESS_PROXY: http://browser-egress:8082
+    depends_on:
+      - browser-egress
+  browser-control:
+    image: ${BIBLIOTHECA_PLAYWRIGHT_IMAGE:-bibliotheca-playwright:1.65.1}
+    command: [node, control.mjs]
+    user: pwuser
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    restart: unless-stopped
+    depends_on:
+      playwright:
+        condition: service_healthy
+    networks:
+      - browser-control
+      - browser
+  browser-egress:
+    image: ${BIBLIOTHECA_PLAYWRIGHT_IMAGE:-bibliotheca-playwright:1.65.1}
+    command: [node, egress.mjs]
+    user: pwuser
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_forward: "0"
+    restart: unless-stopped
+    healthcheck:
+      disable: true
+    networks:
+      - browser
+      - egress
+
+networks:
+  browser-control:
+    internal: true
+  browser:
+    internal: true
+  egress:

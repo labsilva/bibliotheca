@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Livro 1 -->
+  <rect x="3" y="4" width="3" height="12" rx="0.5" />
+  <!-- Livro 2 -->
+  <rect x="8" y="3" width="3" height="13" rx="0.5" />
+  <!-- Livro 3 -->
+  <rect x="13" y="5" width="3" height="11" rx="0.5" />
+  <!-- Prateleira -->
+  <rect x="2" y="18" width="20" height="2" rx="1" />
+  <!-- Livro inclinado a “segurar” os outros -->
+  <rect x="17" y="4" width="3" height="12" rx="0.5" transform="rotate(15 18.5 10)" />
+</svg>

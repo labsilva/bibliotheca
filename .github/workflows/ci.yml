@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Commit to validate for a published release
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ inputs.source_sha || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha || github.sha }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 11.0.x
+      - name: Restore and audit NuGet dependencies
+        run: dotnet restore Bibliotheca.slnx -p:NuGetAudit=true -p:NuGetAuditMode=all -warnaserror:NU1900,NU1903,NU1904
+      - run: dotnet build Bibliotheca.slnx --no-restore --configuration Release
+      - run: dotnet test Bibliotheca.slnx --no-build --configuration Release
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/Bibliotheca.Frontend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: src/Bibliotheca.Frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run build
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep:1.187.0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha || github.sha }}
+      - name: Report static analysis findings
+        run: semgrep scan --config p/csharp --config p/javascript --metrics=off --disable-version-check .

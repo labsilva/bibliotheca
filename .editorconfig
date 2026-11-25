@@ -1,0 +1,54 @@
+# Top-most EditorConfig file
+root = true
+
+# C# Naming Conventions
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:error
+#--------------------------------------------------#
+# Naming Style: _camelCase for readonly fields     #
+#--------------------------------------------------#
+# Define the naming style
+dotnet_naming_style.readonly_field_style.required_prefix = _
+dotnet_naming_style.readonly_field_style.capitalization = camel_case
+dotnet_naming_style.readonly_field_style.store_specification = true
+dotnet_naming_style.prefix_underscore.required_prefix= _
+
+#--------------------------------------------------#
+# Symbol Group: Private readonly fields            #
+#--------------------------------------------------#
+# Define the symbol group to target private, readonly fields
+dotnet_naming_symbols.private_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.private_readonly_fields.applicable_accessibilities = private
+# Note: As of current EditorConfig specifications, you define the *presence* of
+# a modifier. To target only 'readonly' fields, but exclude 'static readonly'
+# fields, a more complex approach with two rules is needed (see explanation below).
+# For simplicity, this rule targets *all* private readonly fields (static or not).
+dotnet_naming_symbols.private_readonly_fields.required_modifiers = readonly
+
+#--------------------------------------------------#
+# Naming Rule: Apply style to group                #
+#--------------------------------------------------#
+# Apply the naming style to the symbol group and set the severity
+dotnet_naming_rule.private_readonly_fields_rule.style = prefix_underscore
+dotnet_naming_rule.private_readonly_fields_rule.symbols = private_readonly_fields
+dotnet_naming_rule.private_readonly_fields_rule.severity = warning
+
+[*.{cs,vb}]
+dotnet_naming_rule.private_members_with_underscore.symbols  = private_fields
+dotnet_naming_rule.private_members_with_underscore.style    = prefix_underscore
+dotnet_naming_rule.private_members_with_underscore.severity = suggestion
+dotnet_naming_symbols.private_fields.applicable_kinds           = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.prefix_underscore.capitalization = camel_case
+dotnet_naming_style.prefix_underscore.required_prefix = _
+
+# Enforce async suffix for async methods
+dotnet_naming_rule.async_methods_end_in_async.symbols = async_methods
+dotnet_naming_rule.async_methods_end_in_async.style = end_in_async
+dotnet_naming_rule.async_methods_end_in_async.severity = error
+
+dotnet_naming_symbols.async_methods.applicable_kinds = method
+dotnet_naming_symbols.async_methods.required_modifiers = async
+
+dotnet_naming_style.end_in_async.required_suffix = Async
+dotnet_naming_style.end_in_async.capitalization = pascal_case

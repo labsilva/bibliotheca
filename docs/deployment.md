@@ -6,6 +6,24 @@ one `bibliotheca-app` image: nginx serves the frontend, Kestrel serves the API,
 and Chromium runs through Playwright under Xvfb. Both images support Linux
 amd64 and arm64; no desktop environment is needed on the host.
 
+## Guided setup for a new combined installation
+
+From the repository root, run `node setup.mjs` with Node.js and OpenSSL installed.
+The assistant asks for your HTTPS origin, TLS mode, host networking and image.
+It writes `.env` and `appsettings.json`, creates the mount directories, generates
+two OIDC certificates and stores their passwords in separate files under
+`secrets/`. It refuses to overwrite existing configuration or initialize a
+populated data directory. No npm installation is required.
+
+Before starting Compose on Linux, apply the bind-mount permissions described
+under [Process identities](#process-identities-and-chromium-isolation) and
+[Mounted certificate passwords](#mounted-certificate-passwords). Configure your
+reverse proxy or supply the direct TLS PEM files. Then follow the printed build
+or pull commands. Read the bootstrap code from the protected `appsettings.json`
+to register the first account, remove the code, assign the administrator ID and
+restart the app as described below. Use a published release tag if you choose
+to pull a prebuilt image.
+
 ## Combined image: first installation
 
 1. Copy `docker/app/env.example` to `.env` and edit it. Set `PUBLIC_URL` to the

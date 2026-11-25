@@ -45,6 +45,18 @@ If using Docker Desktop, you might have to enable `Use containerd for pulling an
 for it to work.
 
 ## Running
+For a new self-hosted installation, run the setup assistant from the repository
+root with Node.js and OpenSSL installed.
+
+```sh
+node setup.mjs
+```
+
+It generates `.env`, `appsettings.json` with a first-account bootstrap code,
+two OIDC certificates and their password files for the combined Docker deployment.
+Follow the [guided deployment instructions](docs/deployment.md#guided-setup-for-a-new-combined-installation)
+to set host permissions, configure HTTPS and start Compose.
+
 There's a `docker-compose.yml` file that serves as a starting point.
 
 For a new database, configure `Authentication:BootstrapCode` with a randomly

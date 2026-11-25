@@ -21,10 +21,11 @@ public class PlaywrightFetcher(IOptions<PlaywrightOptions> options)
     protected static Task<IBrowserContext> NewContextAsync(IBrowser browser) =>
         browser.NewContextAsync();
 
-    protected Task<T> WithBrowserAsync<T>(Func<IBrowser, Task<T>> operation, CancellationToken cancellationToken)
+    protected Task<T> WithBrowserAsync<T>(Func<IBrowser, Task<T>> operation, CancellationToken cancellationToken,
+        bool waitForCleanup = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return RunAsync().WaitAsync(cancellationToken);
+        return waitForCleanup ? RunAsync() : RunAsync().WaitAsync(cancellationToken);
 
         async Task<T> RunAsync()
         {

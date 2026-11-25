@@ -1,0 +1,8 @@
+{
+  "id": "bertrand",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["metadata", "cover"],
+  "navigationOrigins": ["https://www.bertrand.pt"],
+  "resourceOrigins": ["https://www.bertrand.pt"]
+}

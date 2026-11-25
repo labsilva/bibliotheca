@@ -1,5 +1,6 @@
 using Bibliotheca.Backend.Authorization;
 using Bibliotheca.Backend.Data;
+using Bibliotheca.Backend.Extractors;
 using Microsoft.AspNetCore.Authorization;
 using Bibliotheca.Backend.Fetchers;
 using Bibliotheca.Backend.Hubs;
@@ -284,13 +285,31 @@ public class Program
 
         // Fetchers
         builder.Services.AddHttpClient<CoverDownloader>();
+        var extractors = ExtractorDefinition.Load(builder.Configuration.GetSection("Extractors"),
+            builder.Environment.ContentRootPath);
+        builder.Services.AddHttpClient(ExtractorRuntime.ClientName)
+            .ConfigurePrimaryHttpMessageHandler(ExtractorTransport.CreateHandler)
+            .RemoveAllLoggers();
+        builder.Services.AddSingleton<ExtractorRuntime>();
+        foreach (var extractor in extractors)
+        {
+            if (extractor.Manifest.Operations.Contains("metadata"))
+                builder.Services.AddSingleton<IBookFetcher>(services =>
+                    new JavaScriptExtractorFetcher(extractor, services.GetRequiredService<ExtractorRuntime>()));
+            if (extractor.Manifest.Operations.Contains("cover"))
+                builder.Services.AddSingleton<ICoverFetcher>(services =>
+                    new JavaScriptExtractorFetcher(extractor, services.GetRequiredService<ExtractorRuntime>()));
+        }
+        var bertrandExtractor = extractors.SingleOrDefault(extractor => extractor.Manifest.Id == "bertrand");
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()
-                .AddClasses(classes => classes.AssignableTo<IBookFetcher>())
+                .AddClasses(classes => classes.AssignableTo<IBookFetcher>().Where(type =>
+                    type != typeof(BertrandBookFetcher) || bertrandExtractor?.Manifest.Operations.Contains("metadata") != true))
                 .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()
-                .AddClasses(classes => classes.AssignableTo<ICoverFetcher>())
+                .AddClasses(classes => classes.AssignableTo<ICoverFetcher>().Where(type =>
+                    type != typeof(BertrandCoverFetcher) || bertrandExtractor?.Manifest.Operations.Contains("cover") != true))
                 .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()

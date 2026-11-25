@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <None Include="../../extractors/bertrand/*" Link="extractor-fixture/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

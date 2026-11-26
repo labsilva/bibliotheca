@@ -1,8 +1,8 @@
 # JavaScript extractors
 
-Bibliotheca loads enabled extractors when the API starts. The Bertrand pilot supplies
-book metadata and covers by ISBN. Author refresh continues to use the existing
-provider. If no JavaScript extractor is enabled, the existing fetchers are used.
+Bibliotheca loads enabled extractor packages when the API starts. Packages can
+supply book metadata and covers, search and resolve editions, and enrich
+author profiles. Each package declares its capabilities and HTTPS origins.
 
 ## Package discovery
 
@@ -198,9 +198,11 @@ the service with the updated Compose configuration.
 
 Each enabled provider directory contains `manifest.json` and `extract.js`.
 The manifest declares `id`, `contractVersion`, `entry`, `operations`,
-`navigationOrigins` and `resourceOrigins`. Version 1 accepts the
-`metadata` and `cover` operations. Invalid enabled manifests prevent
-startup, so configuration errors can be corrected before serving traffic.
+`navigationOrigins` and `resourceOrigins`. Version 1 supports the browser
+capabilities described under [Use the package registry](#use-the-package-registry)
+and the author profile capability through the Open Library connector.
+Invalid enabled manifests prevent startup so configuration errors can be
+corrected before serving traffic.
 
 The script defines `async function extract(host, operation, isbn)`.
 The input ISBN is a canonical ISBN-13. Return `null` when there is no match.

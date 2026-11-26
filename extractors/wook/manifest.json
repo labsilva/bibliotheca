@@ -1,0 +1,8 @@
+{
+  "id": "wook",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["metadata", "cover"],
+  "navigationOrigins": ["https://www.wook.pt"],
+  "resourceOrigins": ["https://www.wook.pt", "https://img.wook.pt"]
+}

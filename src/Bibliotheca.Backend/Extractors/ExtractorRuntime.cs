@@ -97,7 +97,7 @@ internal sealed class ExtractorRuntime(IOptions<PlaywrightOptions> options, IHtt
                         waitForSelector: async selector => parse(await call("waitForSelector", selector, "")),
                         text: async selector => parse(await call("text", selector, "")),
                         attribute: async (selector, name) => parse(await call("attribute", selector, name)),
-                        downloadImage: async url => parse(await call("downloadImage", url, ""))
+                        downloadImage: async (url, mode = "") => parse(await call("downloadImage", url, mode))
                     });
                 """ + "\n" + script + "\n" + """
                     return stringify(await extract(host, operation, isbn));
@@ -124,6 +124,7 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
     private int requests;
     private Uri? source;
     private Uri? coverRequest;
+    private IPage? coverPage;
     private string? sourceRequestUrl;
     private bool sourceCommitted;
 
@@ -156,7 +157,8 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         var request = route.Request;
         var isNavigation = request.IsNavigationRequest || request.ResourceType == "document";
         var mainNavigation = isNavigation && request.Frame == page.MainFrame;
-        var origins = isNavigation ? manifest.NavigationOrigins : manifest.ResourceOrigins;
+        var coverNavigation = isNavigation && coverPage is not null && request.Frame == coverPage.MainFrame;
+        var origins = isNavigation && !coverNavigation ? manifest.NavigationOrigins : manifest.ResourceOrigins;
         if (mainNavigation)
         {
             source = null;
@@ -169,7 +171,7 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         {
             if (Interlocked.Increment(ref requests) > MaxRequests ||
                 !Uri.TryCreate(request.Url, UriKind.Absolute, out var url) ||
-                !ExtractorDefinition.Allows(url, origins) ||
+                !ExtractorDefinition.Allows(url, origins) || (coverNavigation && url != coverRequest) ||
                 request.Method is not ("GET" or "HEAD" or "POST" or "OPTIONS") ||
                 request.PostDataBuffer is { Length: > 65_536 })
             {
@@ -181,11 +183,18 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
             // offline and receives the final response from our origin-checking transport.
             var headers = (await request.AllHeadersAsync()).Where(pair => RequestHeaders.Contains(pair.Key))
                 .ToDictionary();
-            var downloadingCover = request.ResourceType == "fetch" && url == coverRequest;
+            var downloadingCover = coverNavigation || request.ResourceType == "fetch" && url == coverRequest;
             var response = await ExtractorTransport.SendAsync(client, url, origins,
                 downloadingCover ? CoverDownloader.MaxCoverBytes : MaxDocumentBytes,
                 new HttpMethod(request.Method), request.PostDataBuffer, headers, token,
                 sameOriginRedirects: true, rejectRedirects: downloadingCover);
+            if (coverNavigation && (response.Status is < 200 or >= 300 ||
+                !IsCoverMediaType(response.MediaType?.ToLowerInvariant()) || response.Body.Length == 0))
+            {
+                await route.AbortAsync();
+                return;
+            }
+
             if (mainNavigation && response.Status is >= 200 and < 300 &&
                 response.MediaType?.ToLowerInvariant() is "text/html" or "application/xhtml+xml")
             {
@@ -260,27 +269,31 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
                 return JsonSerializer.Serialize(values);
 
             case "downloadImage" when operation == "cover" && Source is not null:
-                return await DownloadCoverAsync(Resolve(input));
+                return await DownloadCoverAsync(Resolve(input), argument);
 
             default:
                 throw new InvalidDataException("Extractor host operation is unavailable.");
         }
     }
 
-    private async Task<string> DownloadCoverAsync(Uri image)
+    private async Task<string> DownloadCoverAsync(Uri image, string mode)
     {
         Cover = null;
         var product = Source;
         if (!ExtractorDefinition.Allows(image, manifest.ResourceOrigins))
             return "false";
 
+        if (mode is not ("" or "navigate"))
+            throw new InvalidDataException("Unsupported extractor cover download mode.");
         coverRequest = image;
         try
         {
-            var cover = await CoverDownloader.DownloadInPageAsync(page, image.AbsoluteUri);
+            var cover = mode == "navigate"
+                ? await DownloadNavigatedCoverAsync(image)
+                : await CoverDownloader.DownloadInPageAsync(page, image.AbsoluteUri);
             token.ThrowIfCancellationRequested();
             if (!cover.Success || Source != product || cover.Image is not { Length: > 0 and <= CoverDownloader.MaxCoverBytes } ||
-                cover.MimeType is not ("image/jpeg" or "image/png" or "image/webp" or "image/gif" or "image/avif"))
+                !IsCoverMediaType(cover.MimeType))
                 return "false";
 
             Cover = cover;
@@ -291,8 +304,40 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
             token.ThrowIfCancellationRequested();
             return "false";
         }
-        finally { coverRequest = null; }
+        finally
+        {
+            if (coverPage is { } imagePage)
+            {
+                try { await imagePage.CloseAsync(); }
+                catch (PlaywrightException) when (token.IsCancellationRequested) { }
+                finally { coverPage = null; }
+            }
+            coverRequest = null;
+        }
     }
+
+    private async Task<FetchedCover> DownloadNavigatedCoverAsync(Uri image)
+    {
+        coverPage = await context.NewPageAsync();
+        var response = await coverPage.GotoAsync(image.AbsoluteUri, new()
+        {
+            Referer = Source?.AbsoluteUri,
+            WaitUntil = WaitUntilState.Commit
+        });
+        if (response is null || !response.Ok || !Uri.TryCreate(response.Url, UriKind.Absolute, out var actual) ||
+            actual != image || !response.Headers.TryGetValue("content-type", out var contentType))
+            return new() { Success = false };
+
+        var type = contentType.Split(';', 2)[0].Trim().ToLowerInvariant();
+        if (!IsCoverMediaType(type))
+            return new() { Success = false };
+
+        // RelayAsync bounds this response before Playwright receives it.
+        return new() { Success = true, Url = actual.AbsoluteUri, MimeType = type, Image = await response.BodyAsync() };
+    }
+
+    private static bool IsCoverMediaType(string? value) =>
+        value is "image/jpeg" or "image/png" or "image/webp" or "image/gif" or "image/avif" or "image/bmp" or "image/tiff";
 
     private Uri Resolve(string input)
     {

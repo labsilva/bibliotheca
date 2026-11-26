@@ -7,7 +7,8 @@ using Bibliotheca.Backend.Services;
 namespace Bibliotheca.Backend.Extractors;
 
 internal sealed record ExtractorResult(string Isbn, string Title, string[]? Authors, string? Publisher,
-    string? PublishedOn, string? Synopsis, string? Language, int? Pages)
+    string? PublishedOn, string? Synopsis, string? Language, int? Pages, string? Subtitle,
+    string? Collection, string[]? Genres, bool? HasStructuredAuthors)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -26,6 +27,8 @@ internal sealed record ExtractorResult(string Isbn, string Title, string[]? Auth
             string.IsNullOrWhiteSpace(result.Title) || result.Title.Length > 512 ||
             result.Authors is { Length: > 64 } ||
             result.Authors?.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 256) == true ||
+            result.Subtitle?.Length > 512 || result.Collection?.Length > 512 ||
+            result.Genres is { Length: > 32 } || result.Genres?.Any(genre => string.IsNullOrWhiteSpace(genre) || genre.Length > 256) == true ||
             result.Publisher?.Length > 512 || result.Synopsis?.Length > 16_384 ||
             result.Language?.Length > 32 || result.Pages is <= 0 or > 100_000 ||
             (result.PublishedOn is not null && !DateTime.TryParseExact(result.PublishedOn, "yyyy-MM-dd",
@@ -43,7 +46,8 @@ internal sealed record ExtractorResult(string Isbn, string Title, string[]? Auth
             Isbn = Isbn,
             Title = Title.Trim(),
             Authors = authors,
-            HasStructuredAuthors = authors.Length > 0,
+            HasStructuredAuthors = authors.Length > 0 && HasStructuredAuthors != false,
+            Subtitle = Subtitle!,
             PublishedBy = Publisher!,
             PublishedOn = PublishedOn is null ? null : DateTime.ParseExact(PublishedOn, "yyyy-MM-dd", CultureInfo.InvariantCulture),
             Url = Source.AbsoluteUri
@@ -51,6 +55,8 @@ internal sealed record ExtractorResult(string Isbn, string Title, string[]? Auth
         if (Synopsis is not null) book.Metadata[FetchedBook.FetchedBookMetadataSynopsis] = Synopsis;
         if (Language is not null) book.Metadata[FetchedBook.FetchedBookMetadataLanguage] = Language;
         if (Pages is not null) book.Metadata[FetchedBook.FetchedBookMetadataTotalPages] = Pages.Value.ToString(CultureInfo.InvariantCulture);
+        if (Collection is not null) book.Metadata[FetchedBook.FetchedBookMetadataCollection] = Collection;
+        if (Genres is not null) book.Metadata[FetchedBook.FetchedBookMetadataGenres] = Genres;
         return book;
     }
 }

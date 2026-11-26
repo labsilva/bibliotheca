@@ -172,6 +172,93 @@ public class JavaScriptExtractorTests
     }
 
     [ExtractorBrowserFact]
+    public async Task WookPilotMatchesCatalogueAndNavigatesToCoverWithProductReferer()
+    {
+        const string isbn = "9780140328721";
+        const string origin = "https://www.wook.pt";
+        const string imageOrigin = "https://img.wook.pt";
+        const string search = origin + "/pesquisa?keyword=" + isbn;
+        const string product = origin + "/livro/matilda/123";
+        const string wrong = origin + "/livro/wrong/456";
+        const string image = imageOrigin + "/covers/matilda.png";
+        var coverBytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1sAAAAASUVORK5CYII=");
+        var productHtml = $"""<meta property="og:image" content="{image}">""" + WookMetadataTests.ProductHtml(isbn);
+        var expected = WookCatalogue.ReadProduct(productHtml, new Uri(product));
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Directory"] = Path.Combine(AppContext.BaseDirectory, "provider-fixtures"),
+            ["Providers:wook:Enabled"] = "true",
+            ["Providers:wook:NavigationOrigins:0"] = origin,
+            ["Providers:wook:ResourceOrigins:0"] = origin,
+            ["Providers:wook:ResourceOrigins:1"] = imageOrigin
+        }).Build();
+        var definition = Assert.Single(ExtractorDefinition.Load(configuration, AppContext.BaseDirectory));
+        Assert.Equal(5, definition.Priority);
+        Assert.Equal(0, definition.CoverPriority);
+        var requests = new List<string>();
+        var direct = false;
+        var redirectCover = false;
+        var factory = new FixtureClientFactory(request =>
+        {
+            var url = request.RequestUri!.AbsoluteUri;
+            requests.Add(url);
+            return url switch
+            {
+                search when direct => new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(product) } },
+                search => Html("""
+                    <main class="search-results">
+                        <a href="/livro/wrong/456">Wrong</a>
+                        <a href="/livro/matilda/123">Matilda</a>
+                    </main>
+                    """),
+                wrong => Html(WookMetadataTests.ProductHtml("9789895870714")),
+                product => Html(productHtml),
+                image when redirectCover => new(HttpStatusCode.Redirect)
+                {
+                    Headers = { Location = new Uri("/covers/redirected.png", UriKind.Relative) }
+                },
+                image when request.Headers.Referrer?.AbsoluteUri == product => new(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(coverBytes) { Headers = { ContentType = new("image/png") } }
+                },
+                image => new(HttpStatusCode.Forbidden),
+                _ => throw new InvalidOperationException("Unexpected fixture request")
+            };
+        });
+        var runtime = new ExtractorRuntime(Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions()), factory);
+        var fetcher = new JavaScriptExtractorFetcher(definition, runtime);
+        var book = await fetcher.FetchBookAsync(isbn, default);
+        Assert.True(book.Success);
+        Assert.Equal(expected.Isbn, book.Isbn);
+        Assert.Equal(expected.Title, book.Title);
+        Assert.Equal(expected.Subtitle, book.Subtitle);
+        Assert.Equal(expected.Authors, book.Authors);
+        Assert.Equal(expected.HasStructuredAuthors, book.HasStructuredAuthors);
+        Assert.Equal(expected.Publisher, book.PublishedBy);
+        Assert.Equal(expected.PublishedOn, book.PublishedOn);
+        Assert.Equal(expected.Collection, book.Metadata[FetchedBook.FetchedBookMetadataCollection]);
+        Assert.Equal(expected.Pages, book.Metadata[FetchedBook.FetchedBookMetadataTotalPages]);
+        Assert.Equal(expected.Language, book.Metadata[FetchedBook.FetchedBookMetadataLanguage]);
+        Assert.Equal(expected.Synopsis, book.Metadata[FetchedBook.FetchedBookMetadataSynopsis]);
+        Assert.Equal(expected.Genres, Assert.IsType<string[]>(book.Metadata[FetchedBook.FetchedBookMetadataGenres]));
+        Assert.Equal([search, wrong, product], requests);
+
+        requests.Clear();
+        direct = true;
+        var cover = await fetcher.FetchCoverAsync(isbn, default);
+        Assert.True(cover.Success);
+        Assert.Equal(expected.CoverUrl, cover.Url);
+        Assert.Equal("image/png", cover.MimeType);
+        Assert.Equal(coverBytes, cover.Image);
+        Assert.Equal([search, product, image], requests);
+
+        requests.Clear();
+        redirectCover = true;
+        Assert.False((await fetcher.FetchCoverAsync(isbn, default)).Success);
+        Assert.Equal([search, product, image], requests);
+    }
+
+    [ExtractorBrowserFact]
     public async Task BrowserSubmitsSearchAndBlocksUnapprovedRequestsBeforeContact()
     {
         using var playwright = await Playwright.CreateAsync();

@@ -7,7 +7,7 @@ namespace Bibliotheca.Backend.Extractors;
 internal sealed record ExtractorManifest(string Id, int ContractVersion, string Entry, string[] Operations,
     string[] NavigationOrigins, string[] ResourceOrigins);
 
-internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Script, int Priority)
+internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Script, int Priority, int? CoverPriority = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -36,7 +36,8 @@ internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Sc
             ValidateOrigins(manifest.NavigationOrigins, provider.GetSection("NavigationOrigins").Get<string[]>(), true);
             ValidateOrigins(manifest.ResourceOrigins, provider.GetSection("ResourceOrigins").Get<string[]>(), false);
             definitions.Add(new(manifest, ReadFile(Path.Combine(directory, manifest.Entry), 131_072),
-                provider.GetValue("Priority", 6)));
+                provider.GetValue("Priority", id == "wook" ? 5 : 6),
+                provider.GetValue<int?>("CoverPriority") ?? (id == "wook" ? 0 : null)));
         }
         return definitions;
     }

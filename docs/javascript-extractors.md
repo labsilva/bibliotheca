@@ -30,6 +30,28 @@ settings determine where the browser runs. Approval is by exact HTTPS origin
 and by request type. Add each required origin to both the appropriate manifest
 list and the deployment settings. Lower priorities run first.
 
+## Enable the Wook pilot
+
+Use the same read-only extractor mount and add these settings to the API service.
+
+```yaml
+environment:
+  Extractors__Providers__wook__Enabled: "true"
+  Extractors__Providers__wook__NavigationOrigins__0: https://www.wook.pt
+  Extractors__Providers__wook__ResourceOrigins__0: https://www.wook.pt
+  Extractors__Providers__wook__ResourceOrigins__1: https://img.wook.pt
+```
+
+The Wook pilot looks up metadata and covers by ISBN. It checks the product
+ISBN before downloading a cover. The metadata and cover priorities default
+to 5 and 0 respectively. Set `Priority` and `CoverPriority` under the
+provider settings to override them. Wook's existing author and external
+edition providers still handle those operations.
+
+Replace `extractors/wook/extract.js` and restart the API to update the pilot.
+Restore the previous script and restart to roll back, or remove the Wook
+enable setting and recreate the service to return to the built-in fetchers.
+
 ## Update or roll back on the Raspberry Pi
 
 Keep a copy of the currently installed script. Replace only
@@ -53,7 +75,8 @@ The script defines `async function extract(host, operation, isbn)`.
 The input ISBN is a canonical ISBN-13. Return `null` when there is no match.
 A matching result contains `isbn` and `title`. Optional fields include
 `authors` (an array of names), `publisher`, `publishedOn` (YYYY-MM-DD),
-`synopsis`, `language` and `pages` (a positive integer). For a cover,
+`synopsis`, `language`, `pages` (a positive integer), `subtitle`,
+`collection`, `genres` (an array of strings) and `hasStructuredAuthors`. For a cover,
 call `host.downloadImage` before returning the matching metadata. The
 backend tracks the source URL and the downloaded bytes.
 
@@ -67,7 +90,10 @@ backend tracks the source URL and the downloaded bytes.
   attribute values in document order.
 - `await host.downloadImage(url)` downloads an approved raster image.
   It uses the current Playwright page and its cookies. It returns a boolean
-  and is available during cover lookups. Cover downloads reject redirects.
+  and is available during cover lookups. Pass `"navigate"` as the second
+  argument to open the image in a separate page in the same context, with
+  the product URL as the referrer. Both modes use resource origins and
+  reject redirects.
 
 Use scripts you trust and review before installation. Each execution gets a
 Jint engine and an offline Playwright context with page JavaScript enabled.
@@ -84,4 +110,4 @@ fallback and persistence.
 The backend test suite exercises the manifest, redirect policy and result
 contract. Install the Chromium version that matches the backend Playwright
 package and set `BIBLIOTHECA_EXTRACTOR_BROWSER_TESTS=1` to also run the
-Bertrand browser test with local HTTP response fixtures.
+Bertrand and Wook browser tests with local HTTP response fixtures.

@@ -298,18 +298,22 @@ public class Program
                     new JavaScriptExtractorFetcher(extractor, services.GetRequiredService<ExtractorRuntime>()));
             if (extractor.Manifest.Operations.Contains("cover"))
                 builder.Services.AddSingleton<ICoverFetcher>(services =>
-                    new JavaScriptExtractorFetcher(extractor, services.GetRequiredService<ExtractorRuntime>()));
+                    new JavaScriptExtractorFetcher(extractor with { Priority = extractor.CoverPriority ?? extractor.Priority },
+                        services.GetRequiredService<ExtractorRuntime>()));
         }
-        var bertrandExtractor = extractors.SingleOrDefault(extractor => extractor.Manifest.Id == "bertrand");
+        bool HasExtractor(string id, string operation) => extractors.Any(extractor =>
+            extractor.Manifest.Id == id && extractor.Manifest.Operations.Contains(operation));
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()
                 .AddClasses(classes => classes.AssignableTo<IBookFetcher>().Where(type =>
-                    type != typeof(BertrandBookFetcher) || bertrandExtractor?.Manifest.Operations.Contains("metadata") != true))
+                    (type != typeof(BertrandBookFetcher) || !HasExtractor("bertrand", "metadata")) &&
+                    (type != typeof(WookBookFetcher) || !HasExtractor("wook", "metadata"))))
                 .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()
                 .AddClasses(classes => classes.AssignableTo<ICoverFetcher>().Where(type =>
-                    type != typeof(BertrandCoverFetcher) || bertrandExtractor?.Manifest.Operations.Contains("cover") != true))
+                    (type != typeof(BertrandCoverFetcher) || !HasExtractor("bertrand", "cover")) &&
+                    (type != typeof(WookCoverFetcher) || !HasExtractor("wook", "cover"))))
                 .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()

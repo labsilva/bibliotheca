@@ -59,18 +59,25 @@ backend tracks the source URL and the downloaded bytes.
 
 - `await host.goto(url)` fetches an HTML document and returns its final URL
   or `null` for HTTP 404. Relative URLs resolve against the current document.
+- `await host.fill(selector, value)` fills a form field.
+- `await host.click(selector)` clicks an element.
+- `await host.waitForSelector(selector)` waits for an element to become visible.
 - `await host.text(selector)` returns an array of matching text values.
 - `await host.attribute(selector, name)` returns an array of matching
   attribute values in document order.
 - `await host.downloadImage(url)` downloads an approved raster image.
-  It returns a boolean and is available during cover lookups.
+  It uses the current Playwright page and its cookies. It returns a boolean
+  and is available during cover lookups. Cover downloads reject redirects.
 
 Use scripts you trust and review before installation. Each execution gets a
-Jint engine and an offline Playwright context. The backend fetches bounded
-responses over HTTPS and checks origin approval at each redirect hop before
-sending a request. The browser inspects a static copy of the HTML with page
-scripts and service workers disabled. Provider pages that require client-side
-execution, cookies, or interactive navigation are outside this pilot.
+Jint engine and an offline Playwright context with page JavaScript enabled.
+Playwright routes document requests, including forms and iframes, through the
+manifest's navigation origins. Other requests use the resource origins.
+The backend performs the HTTPS requests, bounds the responses, and checks each
+redirect destination before sending a request. Browser redirects can stay on
+the initiating origin. Chromium retains the original request URL for a relayed
+redirect, so use explicit navigation for pages that depend on the redirected
+URL for relative links or scripts. Service workers and WebSockets are blocked.
 The backend owns the execution deadline, result validation, priority,
 fallback and persistence.
 

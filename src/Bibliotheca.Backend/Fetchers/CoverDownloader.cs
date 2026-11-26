@@ -1,11 +1,35 @@
 using Bibliotheca.Backend.Options;
 using Microsoft.Extensions.Options;
+using Microsoft.Playwright;
+using System.Text.Json;
 
 namespace Bibliotheca.Backend.Fetchers;
 
 public sealed class CoverDownloader(HttpClient client, IOptions<FetcherOptions> options)
 {
     public const int MaxCoverBytes = 5 * 1024 * 1024;
+
+    internal static async Task<FetchedCover> DownloadInPageAsync(IPage page, string imageUrl)
+    {
+        // Fetch in the page context, with a streaming limit and without following redirects.
+        var result = await page.EvaluateAsync<JsonElement>("""
+            async ({url, limit}) => {
+              const response = await fetch(url, {credentials: 'include', redirect: 'error'});
+              const type = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
+              if (!response.ok || !['image/jpeg','image/png','image/webp','image/gif','image/avif'].includes(type) ||
+                  Number(response.headers.get('content-length')) > limit || !response.body) return null;
+              const reader = response.body.getReader(); let chunks = [], size = 0;
+              while (true) { const {value, done} = await reader.read(); if (done) break;
+                size += value.length; if (size > limit) { await reader.cancel(); return null; } chunks.push(value); }
+              if (!size) return null; let data = '';
+              for (const chunk of chunks) for (let i = 0; i < chunk.length; i += 8192)
+                data += String.fromCharCode(...chunk.subarray(i, i + 8192));
+              return {type, data: btoa(data)};
+            }
+            """, new { url = imageUrl, limit = MaxCoverBytes });
+        if (result.ValueKind != JsonValueKind.Object) return new FetchedCover { Success = false };
+        return new FetchedCover { Success = true, Url = imageUrl, MimeType = result.GetProperty("type").GetString()!, Image = Convert.FromBase64String(result.GetProperty("data").GetString()!) };
+    }
 
     public async Task<FetchedCover> DownloadAsync(string isbn, string imageUrl, CancellationToken cancellationToken)
     {

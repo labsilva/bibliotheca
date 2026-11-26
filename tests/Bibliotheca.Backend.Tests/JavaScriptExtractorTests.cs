@@ -32,13 +32,13 @@ public class JavaScriptExtractorTests
     [Fact]
     public async Task ProhibitedRedirectIsNeverSent()
     {
-        using var handler = new FixtureHandler(_ => new(HttpStatusCode.Redirect)
+        using var handler = new FixtureHandler((string _) => new(HttpStatusCode.Redirect)
         {
             Headers = { Location = new Uri("https://other.example/forbidden") }
         });
         using var client = new HttpClient(handler);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
-            ExtractorTransport.GetAsync(client, new(Product), [Origin], 4_096, default));
+            ExtractorTransport.SendAsync(client, new(Product), [Origin], 4_096, HttpMethod.Get, null, null, default));
         Assert.Equal([Product], handler.Requests);
     }
 
@@ -82,45 +82,182 @@ public class JavaScriptExtractorTests
     }
 
     [ExtractorBrowserFact]
-    public async Task BertrandPilotUsesLocalFixturesForMetadataAndCover()
+    public async Task BertrandPilotMatchesExistingCatalogueOnSharedFixtures()
     {
+        const string search = Origin + "/pesquisa/" + Isbn;
+        const string wrongProduct = Origin + "/livro/wrong/2";
+        const string coverUrl = Origin + "/cover.png";
+        var coverBytes = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
+        var pages = new Dictionary<string, string>
+        {
+            [search] = """
+                <a href="/livro/wrong/2">Wrong edition</a>
+                <a href="/livro/example/1">Matching edition</a>
+                <img src="https://other.example/no">
+                """,
+            [wrongProduct] = """
+                <script type="application/ld+json">{"isbn":"9789722536486","name":"Wrong"}</script>
+                """,
+            [Product] = """
+                <script type="application/ld+json">{</script>
+                <script type="application/ld+json">
+                    {"@graph":[{"isbn":"9789722536486","name":"Wrong edition"}, {
+                        "isbn":"9782047330081","name":"Example",
+                        "author":[{"name":"Jane Doe","url":"/autor/jane-doe/12"},"jane doe","John Doe"],
+                        "publisher":{"name":"Publisher"},"datePublished":"2024-05-03",
+                        "description":"Synopsis","inLanguage":"pt","numberOfPages":224,
+                        "image":{"url":"/cover.png"}
+                    }]}
+                </script>
+                """
+        };
+        var legacyReader = new BertrandFixtureReader(pages, coverBytes);
+        var legacyLookup = new BertrandCatalogueLookup(legacyReader, NullLogger<BertrandCatalogueLookup>.Instance);
+        var expectedBook = await new BertrandBookFetcher(legacyLookup).FetchBookAsync(Isbn, default);
+        var expectedCover = await new BertrandCoverFetcher(legacyLookup, legacyReader).FetchCoverAsync(Isbn, default);
+
         var directory = Path.Combine(AppContext.BaseDirectory, "extractor-fixture");
         var script = await File.ReadAllTextAsync(Path.Combine(directory, "extract.js"));
         var definition = new ExtractorDefinition(new("bertrand", 1, "extract.js", ["metadata", "cover"],
             [Origin], [Origin]), script, 6);
         var requests = new List<string>();
-        var runtime = new ExtractorRuntime(Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions()), new FixtureClientFactory(url =>
+        var redirectCover = false;
+        var runtime = new ExtractorRuntime(Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions()), new FixtureClientFactory(request =>
         {
+            var url = request.RequestUri!.AbsoluteUri;
             requests.Add(url);
-            return url switch
+            if (pages.TryGetValue(url, out var html))
             {
-                Origin + "/pesquisa/" + Isbn => Html("<a href='/livro/example/1'>Example</a><img src='https://other.example/no'>"),
-                Product => Html("""
-                    <script type="application/ld+json">
-                        {"@graph":[{"isbn":"9789722536486","name":"Wrong edition"},
-                          {"isbn":"9782047330081","name":"Example","author":{"name":"Jane Doe"},"image":"/cover.png"}]}
-                    </script>
-                    """),
-                Origin + "/cover.png" => new(HttpStatusCode.OK)
-                {
-                    Content = new ByteArrayContent([137, 80, 78, 71, 13, 10, 26, 10])
-                    {
-                        Headers = { ContentType = new("image/png") }
-                    }
-                },
-                _ => throw new InvalidOperationException("Unexpected fixture request")
+                var document = Html(html);
+                if (url == Product)
+                    document.Headers.TryAddWithoutValidation("Set-Cookie", "bertrand-cover=fixture; Secure; HttpOnly; Path=/");
+                return document;
+            }
+            if (url != coverUrl) throw new InvalidOperationException("Unexpected fixture request");
+            if (!request.Headers.TryGetValues("Cookie", out var cookies) || !cookies.Contains("bertrand-cover=fixture"))
+                return new(HttpStatusCode.Forbidden);
+            if (redirectCover)
+                return new(HttpStatusCode.Redirect) { Headers = { Location = new Uri("/redirected.png", UriKind.Relative) } };
+            return new(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(coverBytes) { Headers = { ContentType = new("image/png") } }
             };
         }));
         var fetcher = new JavaScriptExtractorFetcher(definition, runtime);
 
         var book = await fetcher.FetchBookAsync(Isbn, default);
-        Assert.Equal("Example", book.Title);
-        Assert.Equal(["Jane Doe"], book.Authors);
+        Assert.True(expectedBook.Success);
+        Assert.True(book.Success);
+        Assert.Equal(expectedBook.Isbn, book.Isbn);
+        Assert.Equal(expectedBook.Title, book.Title);
+        Assert.Equal(expectedBook.Url, book.Url);
+        Assert.Equal(expectedBook.Authors, book.Authors);
+        Assert.Equal(expectedBook.HasStructuredAuthors, book.HasStructuredAuthors);
+        Assert.Equal(expectedBook.PublishedBy, book.PublishedBy);
+        Assert.Equal(expectedBook.PublishedOn, book.PublishedOn);
+        Assert.Equal(expectedBook.Metadata.OrderBy(pair => pair.Key), book.Metadata.OrderBy(pair => pair.Key));
+
         var cover = await fetcher.FetchCoverAsync(Isbn, default);
+        Assert.True(expectedCover.Success);
         Assert.True(cover.Success);
-        Assert.Equal("image/png", cover.MimeType);
-        Assert.Equal(Origin + "/cover.png", requests.Last());
-        Assert.Equal(5, requests.Count);
+        Assert.Equal(expectedCover.Url, cover.Url);
+        Assert.Equal(expectedCover.MimeType, cover.MimeType);
+        Assert.Equal(expectedCover.Image, cover.Image);
+        Assert.Equal([search, wrongProduct, Product, search, wrongProduct, Product, coverUrl], requests);
+
+        requests.Clear();
+        redirectCover = true;
+        Assert.False((await fetcher.FetchCoverAsync(Isbn, default)).Success);
+        Assert.Equal([search, wrongProduct, Product, coverUrl], requests);
+    }
+
+    [ExtractorBrowserFact]
+    public async Task BrowserSubmitsSearchAndBlocksUnapprovedRequestsBeforeContact()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        const string search = Origin + "/search";
+        const string query = Origin + "/results?isbn=" + Isbn;
+        const string resourceOrigin = "https://assets.example";
+        const string redirect = Origin + "/redirect";
+        using var handler = new FixtureHandler((string url) => url switch
+        {
+            search => Html("""
+                <form action="/results">
+                    <input name="isbn">
+                    <button>Search</button>
+                </form>
+                """),
+            query => Html("""
+                <iframe src="https://assets.example/not-a-navigation-origin"></iframe>
+                <img src="https://blocked.example/image">
+                <button id="open">Open</button>
+                <script>
+                    document.querySelector('#open').onclick = () => location.assign('/livro/example/1');
+                </script>
+                """),
+            Product => Html("""
+                <img src="/redirect">
+                <a href="https://assets.example/not-a-navigation-origin">Forbidden</a>
+                <h1>Example</h1>
+                """),
+            redirect => new(HttpStatusCode.Redirect)
+            {
+                Headers = { Location = new Uri("https://blocked.example/redirect-target") }
+            },
+            _ => throw new InvalidOperationException("Unexpected fixture request")
+        });
+        using var client = new HttpClient(handler);
+        var definition = new ExtractorDefinition(new("fixture", 1, "extract.js", ["metadata"],
+            [Origin], [Origin, resourceOrigin]), """
+            async function extract(host, operation, isbn) {
+                await host.goto("https://www.bertrand.pt/search");
+                await host.fill("input", isbn);
+                await host.click("button");
+                await host.waitForSelector("#open");
+                await host.click("#open");
+                await host.waitForSelector("h1");
+                return { isbn, title: (await host.text("h1"))[0] };
+            }
+            """, 6);
+
+        var result = await ExtractorRuntime.RunInBrowserAsync(browser, client, definition, "metadata", Isbn, deadline.Token);
+
+        Assert.Equal("Example", result!.ToBook().Title);
+        Assert.Equal(Product, result.Source.AbsoluteUri);
+        Assert.Equal([search, query, Product, redirect], handler.Requests);
+    }
+
+    [ExtractorBrowserFact]
+    public async Task WookExtractorCannotNavigateToGoogle()
+    {
+        const string wook = "https://wook.pt";
+        const string search = wook + "/search";
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var handler = new FixtureHandler((string url) => url == search
+            ? Html("""<a href="https://google.pt/">Google</a>""")
+            : throw new InvalidOperationException("Unexpected fixture request"));
+        using var client = new HttpClient(handler);
+        var definition = new ExtractorDefinition(new("wook", 1, "extract.js", ["metadata"], [wook], []), """
+            async function extract(host) {
+                await host.goto("https://wook.pt/search");
+                try {
+                    await host.goto("https://google.pt/");
+                } catch (error) {
+                    if (!String(error).includes("approved HTTPS origin")) throw error;
+                    return null;
+                }
+                throw new Error("The Google navigation was accepted.");
+            }
+            """, 6);
+
+        var result = await ExtractorRuntime.RunInBrowserAsync(browser, client, definition, "metadata", Isbn, deadline.Token);
+
+        Assert.Null(result);
+        Assert.Equal([search], handler.Requests);
     }
 
     [ExtractorBrowserFact]
@@ -130,7 +267,7 @@ public class JavaScriptExtractorTests
         await using var browser = await playwright.Chromium.LaunchAsync();
         using var deadline = new CancellationTokenSource();
         var documentRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var signal = new FixtureHandler(_ =>
+        using var signal = new FixtureHandler((string _) =>
         {
             documentRequested.TrySetResult();
             return Html("<p>Fixture</p>");
@@ -173,19 +310,38 @@ public class JavaScriptExtractorTests
         }
     }
 
-    private sealed class FixtureHandler(Func<string, HttpResponseMessage> response) : HttpMessageHandler
+    private sealed class BertrandFixtureReader(IReadOnlyDictionary<string, string> pages, byte[] coverBytes)
+        : IBertrandReader
     {
+        public Task<BertrandPage> ReadAsync(Uri url, CancellationToken token) =>
+            Task.FromResult(new BertrandPage(url.AbsoluteUri, 200, pages[url.AbsoluteUri]));
+
+        public Task<FetchedCover> ReadCoverAsync(Uri product, string isbn, CancellationToken token)
+        {
+            var image = BertrandCatalogue.Parse(pages[product.AbsoluteUri], product, isbn)?.Image;
+            return Task.FromResult(image is null ? new FetchedCover { Success = false } : new FetchedCover
+            {
+                Success = true, Url = image.AbsoluteUri, MimeType = "image/png", Image = coverBytes
+            });
+        }
+    }
+
+    private sealed class FixtureHandler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
+    {
+        public FixtureHandler(Func<string, HttpResponseMessage> response)
+            : this((HttpRequestMessage request) => response(request.RequestUri!.AbsoluteUri)) { }
+
         public List<string> Requests { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             var url = request.RequestUri!.AbsoluteUri;
             Requests.Add(url);
-            return Task.FromResult(response(url));
+            return Task.FromResult(response(request));
         }
     }
 
-    private sealed class FixtureClientFactory(Func<string, HttpResponseMessage> response) : IHttpClientFactory
+    private sealed class FixtureClientFactory(Func<HttpRequestMessage, HttpResponseMessage> response) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(new FixtureHandler(response));
     }

@@ -14,6 +14,9 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         waitForSelector: async selector => parse(await call("waitForSelector", selector, "")),
         text: async selector => parse(await call("text", selector, "")),
         attribute: async (selector, name) => parse(await call("attribute", selector, name)),
+        json: async (selector, path) => parse(await call("json", selector, JSON.stringify(path))),
+        authorEvidence: async (url, name) => parse(await call("authorEvidence", url, name)),
+        rows: async (selector, columns) => parse(await call("rows", selector, JSON.stringify(columns))),
         downloadImage: async (url, mode = "") => parse(await call("downloadImage", url, mode))
         """;
 
@@ -26,6 +29,8 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
     private Uri? source;
     private Uri? coverRequest;
     private IPage? coverPage;
+    private Uri? requestedNavigation;
+    private ExtractorResponse? canonicalResponse;
     private string? sourceRequestUrl;
     private bool sourceCommitted;
 
@@ -42,7 +47,9 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         }
     }
     public FetchedCover? Cover { get; private set; }
+    public HttpRequestException? RequestFailure { get; private set; }
     public System.Collections.Concurrent.ConcurrentDictionary<Uri, byte> Visited { get; } = new();
+    public System.Collections.Concurrent.ConcurrentDictionary<(Uri Edition, Uri Profile, string Name), byte> AuthorEvidence { get; } = new();
 
     public Task ConfigureBrowserAsync()
     {
@@ -51,7 +58,7 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
             if (frame == page.MainFrame && frame.Url == sourceRequestUrl)
             {
                 sourceCommitted = true;
-                if (operation == "authorBiography" && source is not null) Visited.TryAdd(source, 0);
+                if (source is not null) Visited.TryAdd(source, 0);
             }
         };
         return context.RouteAsync("**/*", RelayAsync);
@@ -70,6 +77,7 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
             sourceRequestUrl = null;
             sourceCommitted = false;
             Cover = null;
+            RequestFailure = null;
         }
 
         try
@@ -96,10 +104,25 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
             var headers = (await request.AllHeadersAsync()).Where(pair => RequestHeaders.Contains(pair.Key))
                 .ToDictionary();
             var downloadingCover = coverNavigation || request.ResourceType == "fetch" && url == coverRequest;
-            var response = await ExtractorTransport.SendAsync(client, url, origins,
-                downloadingCover ? CoverDownloader.MaxCoverBytes : MaxDocumentBytes,
-                new HttpMethod(request.Method), request.PostDataBuffer, headers, token,
-                sameOriginRedirects: true, rejectRedirects: downloadingCover);
+            var explicitNavigation = mainNavigation && request.Method == "GET" && requestedNavigation == url;
+            var response = mainNavigation && canonicalResponse is { } cached && cached.Url == url
+                ? cached
+                : await ExtractorTransport.SendAsync(client, url, origins,
+                    downloadingCover ? CoverDownloader.MaxCoverBytes : MaxDocumentBytes,
+                    new HttpMethod(request.Method), request.PostDataBuffer, headers, token,
+                    sameOriginRedirects: true, rejectRedirects: downloadingCover, canonicalNavigation: explicitNavigation);
+            if (explicitNavigation && response.Url != url && response.Status is >= 200 and < 300 &&
+                response.MediaType?.ToLowerInvariant() is ("text/html" or "application/xhtml+xml"))
+            {
+                // Commit an inert document first, then replay the validated response at its real URL.
+                // The browser sees the correct base for scripts, relative resources and final cookies.
+                canonicalResponse = response;
+                await route.FulfillAsync(new() { Status = 200, ContentType = "text/html", Body = "<!doctype html>" });
+                return;
+            }
+            if ((mainNavigation || downloadingCover) && response.Status >= 400 && response.Status is not (404 or 410))
+                RequestFailure = new HttpRequestException("Extractor upstream request failed.", null,
+                    (System.Net.HttpStatusCode)response.Status);
             if (mainNavigation && response.Status >= 400)
             {
                 logger?.Log(response.Status == 404 ? LogLevel.Debug : LogLevel.Warning,
@@ -129,6 +152,8 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         catch (Exception exception) when (exception is InvalidDataException or HttpRequestException or
             IOException or PlaywrightException or OperationCanceledException)
         {
+            if ((mainNavigation || coverNavigation) && exception is HttpRequestException requestFailure)
+                RequestFailure = requestFailure;
             if (!token.IsCancellationRequested)
                 logger?.Log(mainNavigation || coverNavigation || request.ResourceType == "fetch" && coverRequest is not null
                         ? LogLevel.Warning : LogLevel.Debug,
@@ -155,7 +180,7 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         lock (hostCalls)
         {
             token.ThrowIfCancellationRequested();
-            if (pending is { IsCompleted: false } || ++calls > 64 || input.Length > 2048 || argument.Length > (method == "fill" ? 2048 : 64))
+            if (pending is { IsCompleted: false } || ++calls > 64 || input.Length > 2048 || argument.Length > (method is "fill" or "json" or "rows" ? 2048 : method == "authorEvidence" ? 512 : 64))
                 throw new InvalidDataException("Invalid or overlapping extractor host call.");
             return pending = ExecuteHostCallAsync(method, input, argument);
         }
@@ -191,9 +216,7 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
                         manifest.Id, operation, destination.IdnHost);
                     throw new InvalidDataException("Extractor navigation requires an approved HTTPS origin.");
                 }
-                var navigation = await page.GotoAsync(destination.AbsoluteUri,
-                    new() { WaitUntil = WaitUntilState.DOMContentLoaded });
-                return navigation?.Status == 404 ? "null" : JsonSerializer.Serialize(Source?.AbsoluteUri);
+                return await NavigateAsync(destination);
 
             case "fill" when Source is not null:
                 await page.Locator(input).FillAsync(argument);
@@ -214,6 +237,38 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
                     method == "attribute" ? argument : "");
                 return JsonSerializer.Serialize(values);
 
+            case "json" when Source is not null:
+                var path = JsonSerializer.Deserialize<string[]>(argument);
+                if (path is not { Length: > 0 and <= 12 } || path.Any(part => part is null || part.Length > 256))
+                    throw new InvalidDataException("Invalid extractor JSON path.");
+                return await page.Locator(input).First.EvaluateAsync<string>("""
+                    (element, path) => {
+                        if ((element.textContent?.length ?? 0) > 2 * 1024 * 1024) return 'null';
+                        try {
+                            let value = JSON.parse(element.textContent);
+                            for (const key of path) value = value != null && Object.hasOwn(value, key) ? value[key] : null;
+                            const result = JSON.stringify(value);
+                            return result && result.length <= 32768 ? result : 'null';
+                        } catch { return 'null'; }
+                    }
+                    """, path);
+
+            case "rows" when Source is not null:
+                var columns = JsonSerializer.Deserialize<string?[][]>(argument);
+                if (columns is not { Length: > 0 and <= 12 } || columns.Any(column =>
+                    column is not { Length: 2 } || column[0]?.Length > 256 || column[1]?.Length > 64))
+                    throw new InvalidDataException("Invalid extractor DOM projection.");
+                return await page.Locator(input).EvaluateAllAsync<string>("""
+                    (elements, columns) => JSON.stringify(elements.slice(0, 64).map(row =>
+                        columns.map(([selector, attribute]) => {
+                            const element = selector ? row.querySelector(selector) : row;
+                            return (attribute ? element?.getAttribute(attribute) : element?.textContent)?.trim().slice(0, 512) || null;
+                        })))
+                    """, columns);
+
+            case "authorEvidence" when operation == "authorBiography" && Source is { } edition:
+                return await RecordAuthorEvidenceAsync(edition, Resolve(input), argument) ? "true" : "false";
+
             case "downloadImage" when operation == "cover" && Source is not null:
                 return await DownloadCoverAsync(Resolve(input), argument);
 
@@ -222,9 +277,108 @@ internal sealed class ExtractorSession(IBrowserContext context, IPage page, Http
         }
     }
 
+    private async Task<string> NavigateAsync(Uri destination)
+    {
+        requestedNavigation = destination;
+        try
+        {
+            var navigation = await page.GotoAsync(destination.AbsoluteUri, new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+            if (canonicalResponse is { } canonical)
+            {
+                requestedNavigation = null;
+                navigation = await page.GotoAsync(canonical.Url.AbsoluteUri, new() { WaitUntil = WaitUntilState.DOMContentLoaded });
+            }
+            return navigation?.Status == 404 ? "null" : JsonSerializer.Serialize(Source?.AbsoluteUri);
+        }
+        finally
+        {
+            requestedNavigation = null;
+            canonicalResponse = null;
+        }
+    }
+
+    private async Task<bool> RecordAuthorEvidenceAsync(Uri edition, Uri profile, string name)
+    {
+        var expected = AuthorBiographyResult.Normalize(name);
+        if (expected.Length == 0 || !ExtractorDefinition.Allows(profile, manifest.NavigationOrigins)) return false;
+
+        var selector = manifest.Id switch
+        {
+            "wook" => "a[href*='/autor/'], table caption :is(.authors,.author) a[href^='#author-']",
+            "goodreads" => ":is(.ContributorLinksList,.BookPageMetadataSection__contributor) a[href*='/author/show/']",
+            "bertrand" => "a[href*='/autor/']",
+            _ => "a[href]"
+        };
+        var links = await page.Locator(selector).EvaluateAllAsync<string[][]>("""
+            elements => elements.slice(0, 512).map(element => [
+                element.getAttribute('href') || '',
+                (element.querySelector('.ContributorLink__name')?.textContent ?? element.textContent ?? '').trim().slice(0, 512)
+            ])
+            """);
+        if (manifest.Id == "wook")
+        {
+            var profileId = profile.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(2);
+            var credited = links.Any(link => link[0] == "#author-" + profileId &&
+                AuthorBiographyResult.Normalize(link[1]) == expected);
+            if (!credited) return false;
+            links = links.Select(link => new[] { link[0], name }).ToArray();
+        }
+        if (manifest.Id == "bertrand")
+        {
+            var blocks = await page.Locator("script[type='application/ld+json']")
+                .EvaluateAllAsync<string[]>("elements => elements.slice(0, 16).map(element => element.textContent.slice(0, 32768))");
+            links = links.Concat(blocks.SelectMany(AuthorUrls)).ToArray();
+        }
+        if (!links.Any(link => AuthorBiographyResult.Normalize(link[1]) == expected &&
+            Uri.TryCreate(edition, link[0], out var actual) &&
+            AuthorBiographyResult.SameProfile(manifest.Id, profile, actual))) return false;
+        AuthorEvidence.TryAdd((edition, profile, expected), 0);
+        return true;
+    }
+
+    private static IReadOnlyList<string[]> AuthorUrls(string block)
+    {
+        var urls = new List<string[]>();
+        try
+        {
+            using var document = JsonDocument.Parse(block);
+            Read(document.RootElement);
+        }
+        catch (JsonException) { }
+        return urls;
+
+        void Read(JsonElement node)
+        {
+            if (node.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in node.EnumerateArray()) Read(child);
+            }
+            else if (node.ValueKind == JsonValueKind.Object)
+            {
+                if (node.TryGetProperty("author", out var author))
+                {
+                    if (author.ValueKind == JsonValueKind.Array)
+                        foreach (var credit in author.EnumerateArray()) Add(credit);
+                    else Add(author);
+                }
+                if (node.TryGetProperty("@graph", out var graph)) Read(graph);
+            }
+        }
+
+        void Add(JsonElement credit)
+        {
+            if (credit.ValueKind == JsonValueKind.Object && credit.TryGetProperty("url", out var url) &&
+                url.ValueKind == JsonValueKind.String && url.GetString() is { } value &&
+                credit.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String &&
+                name.GetString() is { } text)
+                urls.Add([value, text]);
+        }
+    }
+
     private async Task<string> DownloadCoverAsync(Uri image, string mode)
     {
         Cover = null;
+        RequestFailure = null;
         var product = Source;
         if (!ExtractorDefinition.Allows(image, manifest.ResourceOrigins))
         {

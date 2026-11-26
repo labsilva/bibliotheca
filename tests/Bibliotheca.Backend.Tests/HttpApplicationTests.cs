@@ -437,6 +437,55 @@ public partial class HttpApplicationTests(Xunit.Abstractions.ITestOutputHelper o
             Assert.DoesNotContain(covers, fetcher => fetcher is WookCoverFetcher);
             Assert.Equal(4, Assert.Single(metadata.OfType<JavaScriptExtractorFetcher>()).Priority);
             Assert.Equal(0, Assert.Single(covers.OfType<JavaScriptExtractorFetcher>()).Priority);
+
+            configuration["Extractors:UseBuiltInProviders"] = "false";
+            await using var packageOnly = new ServiceCollection().AddLogging().AddOptions()
+                .AddExtractors(configuration, directory.FullName).BuildServiceProvider();
+            Assert.IsType<JavaScriptExtractorFetcher>(Assert.Single(packageOnly.GetServices<IBookFetcher>()));
+            Assert.IsType<JavaScriptExtractorFetcher>(Assert.Single(packageOnly.GetServices<ICoverFetcher>()));
+            Assert.Empty(packageOnly.GetServices<IExternalEditionProvider>());
+            Assert.Null(packageOnly.GetService<IWookAuthorLookup>());
+            Assert.Null(packageOnly.GetService<BertrandAuthorLookup>());
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
+    [Fact]
+    public async Task InstalledGoogleBooksPackageRunsScriptThroughTheExternalEditionInterface()
+    {
+        var directory = Directory.CreateTempSubdirectory("bibliotheca-api-extractor-");
+        try
+        {
+            var package = directory.CreateSubdirectory("googlebooks");
+            await File.WriteAllTextAsync(Path.Combine(package.FullName, "manifest.json"), """
+                {"id":"googlebooks","contractVersion":1,"entry":"extract.js","operations":["editionSearch","editionResolve"],
+                 "navigationOrigins":[],"resourceOrigins":["https://www.googleapis.com"]}
+                """);
+            await File.WriteAllTextAsync(Path.Combine(package.FullName, "extract.js"), """
+                async function extract(host, operation, candidates) {
+                    if (operation === "editionSearch") return [];
+                    return candidates.map((candidate, index) => index);
+                }
+                """);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Extractors:Directory"] = directory.FullName,
+                ["Extractors:UseBuiltInProviders"] = "false",
+                ["Extractors:Providers:googlebooks:Enabled"] = "true",
+                ["Extractors:Providers:googlebooks:ResourceOrigins:0"] = "https://www.googleapis.com"
+            }).Build();
+            var collection = new ServiceCollection().AddLogging().AddExtractors(configuration, directory.FullName);
+            collection.AddHttpClient(GoogleBooksEditionProvider.ProviderId)
+                .ConfigurePrimaryHttpMessageHandler(() => new GoogleBooksHandler());
+            await using var provider = collection.BuildServiceProvider();
+
+            var extractor = Assert.Single(provider.GetServices<IExternalEditionProvider>());
+            Assert.Equal(GoogleBooksEditionProvider.ProviderId, extractor.Id);
+            Assert.True(extractor.RequiresCredential);
+            Assert.Empty(await extractor.SearchAsync("Matilda", "Roald Dahl", 5, "fixture-key", default));
+            var resolved = await Assert.IsAssignableFrom<IExternalEditionResolver>(extractor)
+                .GetEditionAsync("volume_1", "fixture-key", default);
+            Assert.Equal("volume_1", resolved?.ExternalId);
         }
         finally { directory.Delete(recursive: true); }
     }

@@ -1,7 +1,7 @@
 namespace Bibliotheca.Backend.Extractors;
 
 internal sealed record ExtractorManifest(string Id, int ContractVersion, string Entry, string[] Operations,
-    string[] NavigationOrigins, string[] ResourceOrigins);
+    string[] NavigationOrigins, string[] ResourceOrigins, string[]? OptionalResourceOrigins = null, bool RequireAuthorEvidence = false);
 
 internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Script, int Priority, int? CoverPriority = null,
     bool AuthorBiographyEnabled = false)

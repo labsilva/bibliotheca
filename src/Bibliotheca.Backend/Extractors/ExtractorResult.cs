@@ -63,7 +63,8 @@ internal sealed record ExtractorResult(string Isbn, string Title, string[]? Auth
     }
 }
 
-internal sealed class JavaScriptExtractorFetcher(IExtractor extractor, int priority)
+internal sealed class JavaScriptExtractorFetcher(IExtractor extractor, int priority,
+    IBookFetcher? fallback = null, ICoverFetcher? coverFallback = null, ILogger<JavaScriptExtractorFetcher>? logger = null)
     : IBookFetcher, ICoverFetcher, IFetcherPriority
 {
     internal JavaScriptExtractorFetcher(ExtractorDefinition definition, ExtractorRuntime runtime)
@@ -72,11 +73,30 @@ internal sealed class JavaScriptExtractorFetcher(IExtractor extractor, int prior
     public int Priority => priority;
     internal string Id => extractor.Definition.Manifest.Id;
 
-    public async Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken token) =>
-        (await RunAsync("metadata", isbn, token))?.ToBook() ?? new() { Success = false };
+    public Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken token) =>
+        WithFallbackAsync("metadata", async () => (await RunAsync("metadata", isbn, token))?.ToBook(),
+            fallback is null ? null : () => fallback.FetchBookAsync(isbn, token), new() { Success = false }, token);
 
-    public async Task<FetchedCover> FetchCoverAsync(string isbn, CancellationToken token) =>
-        (await RunAsync("cover", isbn, token))?.Cover ?? new() { Success = false };
+    public Task<FetchedCover> FetchCoverAsync(string isbn, CancellationToken token) =>
+        WithFallbackAsync("cover", async () => (await RunAsync("cover", isbn, token))?.Cover,
+            coverFallback is null ? null : () => coverFallback.FetchCoverAsync(isbn, token), new() { Success = false }, token);
+
+    private async Task<T> WithFallbackAsync<T>(string operation, Func<Task<T?>> extract, Func<Task<T>>? runFallback,
+        T noMatch, CancellationToken token) where T : class
+    {
+        try
+        {
+            return await extract() ?? noMatch;
+        }
+        catch (Exception exception) when (runFallback is not null && !token.IsCancellationRequested &&
+            exception is TimeoutException or HttpRequestException)
+        {
+            logger?.LogWarning("Extractor {ExtractorId} {Operation} failed: {FailureType}",
+                Id, operation, exception.GetType().Name);
+        }
+        logger?.LogInformation("Extractor {ExtractorId} {Operation} using the built-in fallback", Id, operation);
+        return await runFallback!();
+    }
 
     private Task<ExtractorResult?> RunAsync(string operation, string isbn, CancellationToken token) =>
         EditionIsbn.Normalize(isbn) is { } normalized

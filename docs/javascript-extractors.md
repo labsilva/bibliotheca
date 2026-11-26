@@ -17,6 +17,28 @@ with a configuration error. Capabilities and deployment priorities
 determine which adapters are registered for the package. Packages
 with an authenticated API use a backend-approved connector.
 
+## Use the package registry
+
+The registry assembles the ISBN, edition-search and author providers.
+Install or modify a package in the extractor directory, approve its origins
+in deployment settings and restart the API. Set
+`Extractors__UseBuiltInProviders=false` to run only enabled packages.
+The default keeps the existing providers for capabilities that have no
+enabled package. During migration, `Extractors__FallbackToBuiltIn=true`
+can retry the same provider on a timeout or HTTP request failure when a
+built-in equivalent is available. ISBN mismatches and invalid results
+remain rejected.
+
+For authoring and validation, use the [extractor authoring skill](../.agents/skills/bibliotheca-create-extractor/SKILL.md).
+
+Capabilities are declared in `manifest.json`. Browser packages can implement
+`metadata`, `cover`, `editionSearch`, `editionResolve` and `authorBiography`.
+Edition operations receive a search or resolution request and return an
+array of edition records. Edition IDs stay stable even when a product
+slug changes. Author packages use `host.authorEvidence(profileUrl, name)`
+on the edition page before opening the profile. The host records the
+observed credit and the backend associates it with the final result.
+
 ## Install the Bertrand extractor
 
 Mount the repository's `extractors` directory read-only at `/app/extractors`.
@@ -56,11 +78,12 @@ environment:
   Extractors__Providers__wook__ResourceOrigins__1: https://img.wook.pt
 ```
 
-The Wook pilot looks up metadata and covers by ISBN. It checks the product
+The Wook package looks up metadata and covers by ISBN, searches by title
+and author, and resolves existing Wook edition identifiers. It checks the product
 ISBN before downloading a cover. The metadata and cover priorities default
 to 5 and 0 respectively. Set `Priority` and `CoverPriority` under the
-provider settings to override them. Wook's existing author and external
-edition providers still handle those operations.
+provider settings to override them. The author profile operation can be
+enabled separately.
 
 Replace `extractors/wook/extract.js` and restart the API to update the pilot.
 Restore the previous script and restart to roll back, or remove the Wook
@@ -68,17 +91,23 @@ enable setting and recreate the service to return to the built-in fetchers.
 
 ## Enable the Goodreads pilot
 
-Mount the same extractor directory and enable the metadata-only pilot.
+Mount the same extractor directory and enable the Goodreads package.
 
 ```yaml
 environment:
   Extractors__Providers__goodreads__Enabled: "true"
   Extractors__Providers__goodreads__NavigationOrigins__0: https://www.goodreads.com
   Extractors__Providers__goodreads__ResourceOrigins__0: https://www.goodreads.com
+  Extractors__Providers__goodreads__ResourceOrigins__1: https://images-na.ssl-images-amazon.com
+  Extractors__Providers__goodreads__ResourceOrigins__2: https://i.gr-assets.com
 ```
 
-The pilot opens the edition details and verifies the returned ISBN. It reads
-the visible contributor credits and excludes labelled illustrators. Goodreads
+The package opens the edition details and verifies the returned ISBN before
+fetching the cover. It uses structured contributor credits when available.
+CDN approvals are optional for metadata-only deployments. The cover operation
+is activated by default when at least one cover origin is approved. Deployments
+can select a different subset with `EnabledOperations`, for example
+`Extractors__Providers__goodreads__EnabledOperations__0=metadata`. Goodreads
 responses that require an access challenge still need live validation.
 
 ## Enable the Amazon and ISBNdb cover pilots
@@ -118,6 +147,25 @@ records. The script receives candidate references and can only select
 records returned for that search. This pilot uses HTTP and does not start
 Playwright. Removing the extractor setting restores the built-in ordering.
 
+## Enable the Open Library and Google Books packages
+
+Enable the corresponding providers in the existing external edition
+search settings, then enable their extractor packages. Google Books still
+uses the key supplied by the deployment secret store.
+
+```yaml
+environment:
+  Extractors__Providers__openlibrary__Enabled: "true"
+  Extractors__Providers__openlibrary__ResourceOrigins__0: https://openlibrary.org
+  Extractors__Providers__openlibrary__ResourceOrigins__1: https://en.wikipedia.org
+  Extractors__Providers__googlebooks__Enabled: "true"
+  Extractors__Providers__googlebooks__ResourceOrigins__0: https://www.googleapis.com
+```
+
+These API packages can filter and order verified edition or author records
+through their scripts. The built-in connectors keep upstream requests,
+credentials, identity checks and source identifiers under backend control.
+
 ## Enable author biographies
 
 Once a provider is enabled, opt in to biography extraction independently by
@@ -133,7 +181,7 @@ takes the source URL from the observed navigation and records plain text.
 Multiple distinct profiles for the same name produce an ambiguous result.
 The worker continues to apply the existing refresh and fallback policies.
 Goodreads fills a missing biography after the other sources have been tried.
-Author photos still use the existing providers.
+Wook and Bertrand can also supply a photo URL from an approved resource origin.
 
 ## Update or roll back on the Raspberry Pi
 
@@ -184,11 +232,42 @@ Playwright routes document requests, including forms and iframes, through the
 manifest's navigation origins. Other requests use the resource origins.
 The backend performs the HTTPS requests, bounds the responses, and checks each
 redirect destination before sending a request. Browser redirects can stay on
-the initiating origin. Chromium retains the original request URL for a relayed
-redirect, so use explicit navigation for pages that depend on the redirected
-URL for relative links or scripts. Service workers and WebSockets are blocked.
+the initiating origin. Explicit `host.goto` commits the permitted final HTML URL. Page-initiated and
+resource redirects can still retain the initiating URL in Chromium. Intermediate
+redirect cookies are not replayed. Service workers and WebSockets are blocked.
 The backend owns the execution deadline, result validation, priority,
 fallback and persistence.
+
+## Check a package without writing to the catalogue
+
+Run the check with the deployment configuration and package approvals, from
+the application content directory. The command loads the normal extractor
+registry in package-only mode, runs one capability, and exits before the
+web server or database initialization starts.
+
+```sh
+dotnet Bibliotheca.Backend.dll extractors check bertrand cover --isbn 9789897417931
+dotnet Bibliotheca.Backend.dll extractors check wook editionSearch --title Matilda --author "Roald Dahl"
+dotnet Bibliotheca.Backend.dll extractors check wook authorBiography --name "Roald Dahl" --isbn 9789897417931
+```
+
+On the Raspberry Pi, run the check inside the already running application
+container so it can reach the deployed Playwright service. For the split
+Compose deployment, use:
+
+```sh
+docker compose exec -T -w /app api dotnet Bibliotheca.Backend.dll extractors check bertrand cover --isbn 9789897417931
+```
+
+For the single-container deployment, use the `app` service and execute the
+command as the application user with `docker compose exec -T -u app -w /app app`.
+
+Use `extractors help` for the other operations. The command writes a JSON
+summary to stdout and diagnostics to stderr. Exit status 0 means a match, 1
+means a failed check, 2 means invalid input or missing configuration, and 3
+means no match or an ambiguous author. Edition searches use the existing
+provider settings and secrets. Use the check before and after replacing a
+script, then verify persistence by running the normal application flow.
 
 ## Diagnose an extraction
 
@@ -206,4 +285,4 @@ at once. Waiting for a slot counts toward the execution deadline.
 The backend test suite exercises the manifest, redirect policy and result
 contract. Install the Chromium version that matches the backend Playwright
 package and set `BIBLIOTHECA_EXTRACTOR_BROWSER_TESTS=1` to also run the
-Bertrand and Wook browser tests with local HTTP response fixtures.
+browser extractor tests with local HTTP response fixtures.

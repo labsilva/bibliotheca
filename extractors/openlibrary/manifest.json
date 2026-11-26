@@ -1,0 +1,15 @@
+{
+  "id": "openlibrary",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": [
+    "editionSearch",
+    "editionResolve",
+    "authorProfile"
+  ],
+  "navigationOrigins": [],
+  "resourceOrigins": [
+    "https://openlibrary.org",
+    "https://en.wikipedia.org"
+  ]
+}

@@ -66,6 +66,12 @@ async function extract(host, operation, input) {
     const first = async selector => clean((await host.text(selector))[0]);
     const detail = label => readDetail(host, label);
     const title = await first(".BookPageTitleSection__title h1");
+    if (operation === "cover") {
+        const images = await host.attribute(".BookCover img, img[data-testid='coverImage'], img[role='presentation']", "src");
+        for (const image of [...new Set(images.filter(Boolean))].slice(0, 3))
+            if (title && await host.downloadImage(image, "navigate")) return { isbn: book.isbn, title };
+        return null;
+    }
     if (!title) return null;
     const published = (await detail("Published"))?.split(" by ");
     const pages = Number(/^(\d+)\s+pages/i.exec(await detail("Format") ?? "")?.[1]);
@@ -75,7 +81,7 @@ async function extract(host, operation, input) {
         isbn: book.isbn,
         title,
         subtitle: await first(".BookPageTitleSection__title h3.Text__title3 a"),
-        authors: (await host.text(authors)).map(clean).filter(Boolean),
+        authors: await structuredAuthors(host, book.editionUrl) ?? (await host.text(authors)).map(clean).filter(Boolean),
         synopsis: await first(".BookPageMetadataSection__description"),
         genres: (await host.text(".BookPageMetadataSection__genreButton")).map(clean).filter(Boolean),
         language: await detail("Language") ?? "English",
@@ -115,7 +121,7 @@ async function extractBiography(host, input) {
         for (const [index, name] of names.entries()) {
             if (authorKey(name) !== expected) continue;
             const profile = authorAddress(links[index]);
-            if (profile) candidates.set(profile.id, { ...book, editionIndex, address: profile.url });
+            if (profile && await host.authorEvidence(profile.url, input.name)) candidates.set(profile.id, { ...book, editionIndex, address: profile.url });
         }
         if (candidates.size > 1) return { ambiguous: true };
     }
@@ -127,4 +133,30 @@ async function extractBiography(host, input) {
     const biography = biographyText((await host.text(".aboutAuthorInfo span[id^='freeText']:not([id^='freeTextContainer'])"))[0]) ??
         biographyText((await host.text("[data-testid='authorBiography'], .AuthorPage__biography, .aboutAuthorInfo"))[0]);
     return biography ? { ...proof, name, biography } : null;
+}
+
+function isBookAuthor(role) {
+    return ["", "author", "co-author", "coauthor", "writer", "adaptor", "adapter", "adaptation", "story"]
+        .includes((role ?? "").trim().replace(/^\(|\)$/g, "").trim().toLowerCase());
+}
+
+async function structuredAuthors(host, url) {
+    const bookId = /\/book\/show\/(\d+)/.exec(url)?.[1];
+    const selector = "script#__NEXT_DATA__";
+    if (!bookId || !(await host.attribute(selector, "id")).length) return undefined;
+    const state = ["props", "pageProps", "apolloState"];
+    const reference = await host.json(selector, [...state, "ROOT_QUERY",
+        'getBookByLegacyId({"legacyId":"' + bookId + '"})', "__ref"]);
+    if (typeof reference !== "string") return undefined;
+    const primary = await host.json(selector, [...state, reference, "primaryContributorEdge"]);
+    const secondary = await host.json(selector, [...state, reference, "secondaryContributorEdges"]);
+    if (!primary && !Array.isArray(secondary)) return undefined;
+    const authors = [];
+    for (const edge of [primary, ...(secondary ?? [])].filter(Boolean).slice(0, 24)) {
+        if (!isBookAuthor(edge.role)) continue;
+        const name = clean(edge.node?.name ?? (edge.node?.__ref
+            ? await host.json(selector, [...state, edge.node.__ref, "name"]) : undefined));
+        if (name && !authors.some(author => author.toLowerCase() === name.toLowerCase())) authors.push(name);
+    }
+    return authors;
 }

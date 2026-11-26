@@ -51,7 +51,7 @@ async function readProduct(host, isbn) {
         await firstAttribute("[itemprop='" + name + "']", attribute) ?? await firstText("[itemprop='" + name + "']");
     const actual = fields.get("isbn") ?? await firstAttribute("meta[property='book:isbn']", "content") ?? await property("isbn");
     const title = await firstText("caption p.font-medium, caption [itemprop='name']") ?? await firstText("h1");
-    if (normalizedIsbn(actual) !== isbn || !title) return null;
+    if ((isbn && normalizedIsbn(actual) !== isbn) || !title) return null;
 
     const byline = ".authors, .author, .product-author, [itemprop='author'], [class*='product-author']";
     const excluded = ":not(:is(.illustrator, [itemprop='illustrator'], [data-role='illustrator' i], .illustrator *, [itemprop='illustrator'] *, [data-role='illustrator' i] *))";
@@ -76,6 +76,7 @@ async function readProduct(host, isbn) {
     const genre = (fields.get("classificação temática") ?? fields.get("classificação"))?.split(">").map(clean).filter(Boolean).at(-1);
     const pages = Number(fields.get("páginas"));
     return {
+        format: fields.get("encadernação") ?? fields.get("tipo de produto"),
         image: image?.replace(/\s+\d+(?:\.\d+)?[wx]$/, ""),
         metadata: {
             isbn: actual, title, authors, hasStructuredAuthors: structured,
@@ -92,6 +93,7 @@ async function readProduct(host, isbn) {
 }
 
 async function extract(host, operation, input) {
+    if (operation === "editionSearch" || operation === "editionResolve") return await extractEditions(host, operation, input);
     if (operation === "authorBiography") return await extractBiography(host, input);
     return await findProduct(host, input, async () => {
         const product = await readProduct(host, input);
@@ -168,8 +170,10 @@ async function extractBiography(host, input) {
                 const profiles = new Set(links.filter(link => link.id === id).map(link => link.url));
                 if (profiles.size > 1) return { ambiguous: true };
                 if (profiles.size === 1) {
+                    const address = profiles.values().next().value;
+                    if (!await host.authorEvidence(address, input.name)) continue;
                     matched = true;
-                    candidates.set(id, { address: profiles.values().next().value, editionIndex, editionUrl, isbn });
+                    candidates.set(id, { address, editionIndex, editionUrl, isbn });
                 }
             }
             return matched ? { matched: true } : null;
@@ -190,5 +194,79 @@ async function extractBiography(host, input) {
     const name = (await host.text(person + " h1[itemprop='name']"))[0]?.trim();
     if (authorKey(name) !== expected) return null;
     const biography = biographyText((await host.text(person + " [itemprop='description'] .bio-text"))[0]);
-    return biography ? { ...proof, name, biography } : null;
+    const photoUrl = (await host.attribute(person + " img[itemprop='image']", "src"))[0]?.trim() || undefined;
+    return biography || photoUrl ? { ...proof, name, biography, photoUrl } : null;
+}
+
+function editionFormat(url) {
+    return { livro: "Livro", ebook: "eBook", audiolivro: "Audiolivro" }[url.slice(origin.length + 1).split("/")[0]];
+}
+
+function coverAddress(value) {
+    if (value?.startsWith("//")) return "https:" + value;
+    if (value?.startsWith("/")) return origin + value;
+    return value?.startsWith("https://") ? value : undefined;
+}
+
+function asEdition(product, url, externalId = productAddress(url).slice(origin.length + 1)) {
+    const data = product.metadata;
+    return {
+        externalId, sourceUrl: url, title: data.title, author: data.authors.length ? data.authors.join(", ") : undefined,
+        isbn: normalizedIsbn(data.isbn), language: data.language, publisher: data.publisher,
+        year: data.publishedOn ? Number(data.publishedOn.slice(0, 4)) : undefined,
+        coverUrl: coverAddress(product.image), format: product.format ?? editionFormat(productAddress(url)),
+        details: { subtitle: data.subtitle, authors: data.authors, publishedOn: data.publishedOn,
+            collection: data.collection, pages: data.pages ? String(data.pages) : undefined,
+            synopsis: data.synopsis, genres: data.genres, hasStructuredAuthors: data.hasStructuredAuthors }
+    };
+}
+
+async function extractEditions(host, operation, input) {
+    if (operation === "editionResolve") {
+        const expected = productAddress("/" + input.externalId);
+        if (!expected || expected.slice(origin.length + 1) !== input.externalId) return [];
+        const url = await host.goto(expected);
+        if (productAddress(url)?.split("/").at(-1) !== expected.split("/").at(-1)) return [];
+        const product = await readProduct(host);
+        return product ? [asEdition(product, url, input.externalId)] : [];
+    }
+
+    const keyword = [input.title, input.author].filter(Boolean).join(" ");
+    const url = await host.goto(origin + "/pesquisa?keyword=" + encodeURIComponent(keyword));
+    if (!url) return [];
+    if (productAddress(url)) {
+        const product = await readProduct(host);
+        return product ? [asEdition(product, url)] : [];
+    }
+
+    const area = ":is(#search-results, .search-results, #product-list, .product-list, .product-listing, main)";
+    const link = "a[href*='/livro/'], a[href*='/ebook/'], a[href*='/audiolivro/']";
+    const rows = await host.rows(area + " :is(article, li, .product-item, .product-card, [data-product-id])", [
+        [link, "href"], ["h2, h3, .title, .book-title, .product-title, [itemprop='name']", null],
+        [link, "title"], [".authors, .author, [itemprop='author']", null], [null, "data-isbn"],
+        ["[itemprop='isbn'], .isbn", null], ["[itemprop='inLanguage'], .language", null],
+        ["[itemprop='publisher'], .publisher", null], ["img[data-src]", "data-src"], ["img[src]", "src"],
+        ["[itemprop='datePublished'], .publication-date, .year", null]
+    ]);
+    const fallbackLinks = await host.rows(area + " :is(" + link + "):not(:is(header *, footer *, nav *, aside *))",
+        [[null, "href"], [null, null], [null, "title"]]);
+    const editions = new Map();
+    for (const [href, heading, label, author, isbn, isbnText, language, publisher, lazy, image, date] of rows.concat(fallbackLinks)) {
+        const address = productAddress(href);
+        const title = clean(heading) ?? clean(label);
+        const key = address?.split("/").at(-1);
+        if (!key || !title || editions.has(key)) continue;
+        const published = publicationDate(clean(date));
+        editions.set(key, {
+            externalId: address.slice(origin.length + 1), title, author: clean(author), isbn: normalizedIsbn(isbn ?? isbnText),
+            language: clean(language), publisher: clean(publisher), sourceUrl: address, format: editionFormat(address),
+            coverUrl: coverAddress((lazy ?? image)?.replace(/\s+\d+(?:\.\d+)?[wx]$/, "")),
+            year: published ? Number(published.slice(0, 4)) : undefined
+        });
+        if (editions.size === input.limit) break;
+    }
+    if (!editions.size && !(await host.text("body")).some(text =>
+        /não foram encontrados resultados|não encontrámos resultados|não encontrou o que procura/i.test(text)))
+        throw new Error("Wook search results could not be recognized.");
+    return [...editions.values()];
 }

@@ -19,7 +19,8 @@ internal sealed class ExtractorTransport
 
     public static async Task<ExtractorResponse> SendAsync(HttpClient client, Uri url,
         IReadOnlyCollection<string> origins, int limit, HttpMethod method, byte[]? data,
-        IReadOnlyDictionary<string, string>? headers, CancellationToken token, bool sameOriginRedirects = false, bool rejectRedirects = false)
+        IReadOnlyDictionary<string, string>? headers, CancellationToken token, bool sameOriginRedirects = false, bool rejectRedirects = false,
+        bool canonicalNavigation = false)
     {
         var originalOrigin = url.GetLeftPart(UriPartial.Authority);
         for (var redirects = 0; redirects <= 5; redirects++)
@@ -48,7 +49,8 @@ internal sealed class ExtractorTransport
                 if (sameOriginRedirects && originalOrigin != next.GetLeftPart(UriPartial.Authority))
                     throw new InvalidDataException("Extractor browser redirects must stay on the initiating origin.");
                 // The browser did not select cookies for the redirect target path.
-                headers = null;
+                headers = headers?.Where(header => header.Key is "accept" or "user-agent" or "content-type")
+                    .ToDictionary();
                 if (status == 303 && method != HttpMethod.Head || status is 301 or 302 && method == HttpMethod.Post)
                 {
                     method = HttpMethod.Get;
@@ -75,7 +77,7 @@ internal sealed class ExtractorTransport
             var responseHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var (name, values) in response.Headers.Concat(response.Content.Headers))
             {
-                if (name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase) && redirects > 0)
+                if (name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase) && redirects > 0 && !canonicalNavigation)
                     continue;
                 if (ForwardedResponseHeaders.Contains(name))
                     responseHeaders[name] = string.Join(name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase)

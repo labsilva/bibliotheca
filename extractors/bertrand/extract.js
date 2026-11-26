@@ -131,7 +131,7 @@ async function extractBiography(host, input) {
         for (const credit of product.credits) {
             if (authorKey(name(credit)) !== expected) continue;
             const address = authorAddress(text(credit?.url));
-            if (!address) continue;
+            if (!address || !await host.authorEvidence(address, input.name)) continue;
             candidates.set(address.split("/").at(-1), {
                 address, editionIndex, editionUrl: product.url, isbn: product.metadata.isbn
             });
@@ -147,7 +147,8 @@ async function extractBiography(host, input) {
         for (const person of records(data)) {
             if (person["@type"] !== "Person" || authorKey(text(person.name)) !== expected) continue;
             const biography = biographyText(text(person.description));
-            if (biography) return { ...proof, name: person.name, biography };
+            const photoUrl = text(person.image) ?? text(person.image?.url);
+            if (biography || photoUrl) return { ...proof, name: person.name, biography, photoUrl };
         }
     }
     return null;

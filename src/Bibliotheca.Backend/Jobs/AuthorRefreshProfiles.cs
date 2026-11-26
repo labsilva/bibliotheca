@@ -14,7 +14,7 @@ internal sealed class AuthorRefreshProfiles(ILogger<AuthorRefreshWorker> logger)
         AuthorProfile? profile = null;
         WookAuthorResult? wook = null;
         BertrandAuthorResult? bertrand = null;
-        AuthorBiographyResult? goodreads = null;
+        AuthorBiographyResult? additional = null;
         string? error = author is null ? "The author was deleted." : null;
         if (author is not null)
         {
@@ -57,13 +57,16 @@ internal sealed class AuthorRefreshProfiles(ILogger<AuthorRefreshWorker> logger)
                     }
                     if (biography is { Ambiguous: true })
                         wook = new(null, null, null, true);
-                    else if (biography?.Biography is { } wookBiography)
-                        wook = new(wook?.PhotoUrl, wookBiography, biography.SourceUrl);
+                    else if (biography is not null)
+                        wook = new(biography.PhotoUrl ?? wook?.PhotoUrl, biography.Biography ?? wook?.Biography,
+                            biography.Biography is not null ? biography.SourceUrl : wook?.SourceUrl);
                 }
                 biographyExtractors.TryGetValue("bertrand", out var bertrandExtractor);
-                biographyExtractors.TryGetValue("goodreads", out var goodreadsExtractor);
+                var additionalExtractors = biographyExtractors.Values
+                    .Where(extractor => extractor.Id is not ("wook" or "bertrand"))
+                    .OrderBy(extractor => extractor.Priority).ThenBy(extractor => extractor.Id, StringComparer.Ordinal).ToArray();
                 var bertrandLookup = services.GetService<BertrandAuthorLookup>();
-                if (bertrandLookup is not null || bertrandExtractor is not null || goodreadsExtractor is not null)
+                if (bertrandLookup is not null || bertrandExtractor is not null || additionalExtractors.Length > 0)
                 {
                     var isbns = await database.Books.AsNoTracking()
                         .Where(book => book.Isbn != null && book.Authors!.Any(a => a.AuthorId == author.AuthorId))
@@ -82,18 +85,27 @@ internal sealed class AuthorRefreshProfiles(ILogger<AuthorRefreshWorker> logger)
                     }
                     if (biography is { Ambiguous: true } && bertrand is not null)
                         bertrand = bertrand with { Biography = null };
-                    else if (biography?.Biography is { } bertrandBiography)
-                        bertrand = new(bertrandBiography, bertrand?.PhotoUrl, biography.SourceUrl!);
+                    else if (biography is not null)
+                        bertrand = new(biography.Biography ?? bertrand?.Biography, biography.PhotoUrl ?? bertrand?.PhotoUrl,
+                            biography.Biography is not null ? biography.SourceUrl! : bertrand?.SourceUrl ?? biography.SourceUrl!);
 
                     if (string.IsNullOrWhiteSpace(author.Biography) &&
                         string.IsNullOrWhiteSpace(profile?.Biography) && string.IsNullOrWhiteSpace(wook?.Biography) &&
                         string.IsNullOrWhiteSpace(bertrand?.Biography))
-                        goodreads = await FindBiographyAsync(goodreadsExtractor, author, editions, timeout.Token);
+                    {
+                        foreach (var extractor in additionalExtractors)
+                        {
+                            var candidate = await FindBiographyAsync(extractor, author, editions, timeout.Token);
+                            if (candidate is not { Ambiguous: false } || candidate.Biography is null && candidate.PhotoUrl is null) continue;
+                            additional = candidate;
+                            break;
+                        }
+                    }
 
-                    if ((bertrand is not null || goodreads?.Biography is not null) && error == "Wook author lookup failed.")
+                    if ((bertrand is not null || additional is not null) && error == "Wook author lookup failed.")
                         error = null;
                 }
-                if (openFailure is not null && wook is null && bertrand is null && profile is null && goodreads?.Biography is null)
+                if (openFailure is not null && wook is null && bertrand is null && profile is null && additional is null)
                     error = "Author profile providers unavailable.";
             }
             catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
@@ -102,7 +114,7 @@ internal sealed class AuthorRefreshProfiles(ILogger<AuthorRefreshWorker> logger)
                 error = exception is OperationCanceledException ? "Provider request timed out." : "Could not refresh this author.";
             }
         }
-        return new(profile, wook, bertrand, goodreads, error);
+        return new(profile, wook, bertrand, additional, error);
     }
 
     private async Task<AuthorBiographyResult?> FindBiographyAsync(IAuthorBiographyLookup? extractor, Author author,
@@ -185,13 +197,13 @@ internal sealed class AuthorRefreshProfiles(ILogger<AuthorRefreshWorker> logger)
 }
 
 internal sealed record AuthorRefreshResolution(AuthorProfile? Profile, WookAuthorResult? Wook,
-    BertrandAuthorResult? Bertrand, AuthorBiographyResult? Goodreads, string? Error)
+    BertrandAuthorResult? Bertrand, AuthorBiographyResult? Additional, string? Error)
 {
     public bool IsAmbiguous => Wook?.Ambiguous == true;
 
     public bool ApplyTo(Author current)
     {
-        var (profile, wook, bertrand, goodreads, _) = this;
+        var (profile, wook, bertrand, additional, _) = this;
         var changed = profile is not null && profile.ApplyTo(current, refreshBiography: true);
         if (wook is { Ambiguous: false })
         {
@@ -207,10 +219,15 @@ internal sealed record AuthorRefreshResolution(AuthorProfile? Profile, WookAutho
         { current.Biography = bertrandText; current.BiographySourceUrl = bertrand.SourceUrl; changed = true; }
         if (string.IsNullOrWhiteSpace(current.PhotoUrl) && !string.IsNullOrWhiteSpace(bertrand?.PhotoUrl))
         { current.PhotoUrl = bertrand.PhotoUrl; changed = true; }
-        if (string.IsNullOrWhiteSpace(current.Biography) && goodreads?.Biography is { } goodreadsBiography)
+        if (string.IsNullOrWhiteSpace(current.Biography) && additional?.Biography is { } additionalBiography)
         {
-            current.Biography = goodreadsBiography;
-            current.BiographySourceUrl = goodreads.SourceUrl;
+            current.Biography = additionalBiography;
+            current.BiographySourceUrl = additional.SourceUrl;
+            changed = true;
+        }
+        if (string.IsNullOrWhiteSpace(current.PhotoUrl) && additional?.PhotoUrl is { } photo)
+        {
+            current.PhotoUrl = photo;
             changed = true;
         }
         return changed;

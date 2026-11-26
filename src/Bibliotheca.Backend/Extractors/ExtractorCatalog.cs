@@ -32,21 +32,49 @@ internal static class ExtractorCatalog
                 throw new InvalidDataException($"Enabled extractor '{id}' must be installed as a local directory.");
             var manifest = JsonSerializer.Deserialize<ExtractorManifest>(
                 ReadFile(Path.Combine(directory, "manifest.json"), 16_384), JsonOptions);
+            var apiOrigins = id switch
+            {
+                "hardcover" => new[] { "https://api.hardcover.app" },
+                "openlibrary" => new[] { "https://openlibrary.org", "https://en.wikipedia.org" },
+                "googlebooks" => new[] { "https://www.googleapis.com" },
+                _ => null
+            };
             if (manifest is null || manifest.Id != id || manifest.ContractVersion != 1 ||
                 manifest.Entry != "extract.js" || manifest.Operations is not { Length: > 0 } ||
-                manifest.Operations.Any(operation => id == "hardcover"
-                    ? operation is not ("editionSearch" or "editionResolve")
-                    : operation is not ("metadata" or "cover") &&
-                        !(operation == "authorBiography" && id is "wook" or "bertrand" or "goodreads")) ||
-                (id == "hardcover" && (manifest.NavigationOrigins is not { Length: 0 } ||
-                    manifest.ResourceOrigins is not ["https://api.hardcover.app"])))
+                manifest.Operations.Any(operation => apiOrigins is not null
+                    ? operation is not ("editionSearch" or "editionResolve") && !(id == "openlibrary" && operation == "authorProfile")
+                    : operation is not ("metadata" or "cover" or "editionSearch" or "editionResolve" or "authorBiography")) ||
+                (apiOrigins is not null && (manifest.NavigationOrigins is not { Length: 0 } ||
+                    manifest.ResourceOrigins is null || !manifest.ResourceOrigins.SequenceEqual(apiOrigins, StringComparer.Ordinal) ||
+                    manifest.OptionalResourceOrigins is { Length: > 0 })))
                 throw new InvalidDataException($"Invalid version 1 manifest for extractor '{id}'.");
 
-            ValidateOrigins(manifest.NavigationOrigins, provider.GetSection("NavigationOrigins").Get<string[]>(), id != "hardcover");
-            ValidateOrigins(manifest.ResourceOrigins, provider.GetSection("ResourceOrigins").Get<string[]>(), false);
+            ValidateOrigins(manifest.NavigationOrigins, provider.GetSection("NavigationOrigins").Get<string[]>(), apiOrigins is null);
+            var approvedResources = provider.GetSection("ResourceOrigins").Get<string[]>() ?? [];
+            ValidateOrigins(manifest.ResourceOrigins, approvedResources, false);
+            var optionalResources = manifest.OptionalResourceOrigins ?? [];
+            ValidateOrigins(optionalResources, optionalResources, false);
+            manifest = manifest with
+            {
+                RequireAuthorEvidence = manifest.RequireAuthorEvidence ||
+                    (id is not ("wook" or "bertrand" or "goodreads") && manifest.Operations.Contains("authorBiography")),
+                ResourceOrigins = manifest.ResourceOrigins.Concat(optionalResources.Intersect(approvedResources, StringComparer.Ordinal))
+                    .Distinct(StringComparer.Ordinal).ToArray()
+            };
+            var enabledOperations = provider.GetSection("EnabledOperations").Get<string[]>();
+            if (enabledOperations is not null)
+            {
+                if (enabledOperations.Any(operation => !manifest.Operations.Contains(operation, StringComparer.Ordinal)))
+                    throw new InvalidDataException($"Extractor '{id}' enables an undeclared operation.");
+                manifest = manifest with { Operations = manifest.Operations.Intersect(enabledOperations, StringComparer.Ordinal).ToArray() };
+            }
+            else if (id == "goodreads" && optionalResources.Length > 0 &&
+                !optionalResources.Intersect(approvedResources, StringComparer.Ordinal).Any())
+                manifest = manifest with { Operations = manifest.Operations.Where(operation => operation != "cover").ToArray() };
+
             definitions.Add(new(manifest, ReadFile(Path.Combine(directory, manifest.Entry), 131_072),
                 provider.GetValue("Priority", id switch { "wook" => 5, "goodreads" => 10, "amazon" => 2, "isbndb" => 100, _ => 6 }),
-                provider.GetValue<int?>("CoverPriority") ?? (id == "wook" ? 0 : null),
+                provider.GetValue<int?>("CoverPriority") ?? (id switch { "wook" => 0, "goodreads" => 1, _ => (int?)null }),
                 provider.GetValue<bool>("AuthorBiographyEnabled")));
         }
         return definitions;

@@ -10,7 +10,7 @@ using Bibliotheca.Backend.Extractors;
 namespace Bibliotheca.Backend.Services;
 
 internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, ExtractorDefinition? extractor = null,
-    ILogger<HardcoverEditionProvider>? logger = null)
+    ILogger<HardcoverEditionProvider>? logger = null, bool useBuiltIn = true)
     : IExternalEditionProvider, IExternalEditionResolver, IDisposable
 {
     public const string ProviderId = "hardcover";
@@ -66,6 +66,7 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, Extra
         using var client = clients.CreateClient(ProviderId);
         if (extractor?.Manifest.Operations.Contains("editionSearch") == true)
             return await ExtractSearchAsync(client, phrase, limit, credential, cancellationToken);
+        if (!useBuiltIn) return [];
 
         var ids = await SearchWorksAsync(client, phrase, Math.Min(5, limit), credential, cancellationToken);
         if (ids.Length == 0) return [];
@@ -151,7 +152,7 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, Extra
 
         using var client = clients.CreateClient(ProviderId);
         if (extractor?.Manifest.Operations.Contains("editionResolve") != true)
-            return await ReadEditionAsync(client, id, credential, cancellationToken);
+            return useBuiltIn ? await ReadEditionAsync(client, id, credential, cancellationToken) : null;
 
         ExternalEdition? edition = null;
         var called = 0;

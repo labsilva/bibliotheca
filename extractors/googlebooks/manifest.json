@@ -1,0 +1,13 @@
+{
+  "id": "googlebooks",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": [
+    "editionSearch",
+    "editionResolve"
+  ],
+  "navigationOrigins": [],
+  "resourceOrigins": [
+    "https://www.googleapis.com"
+  ]
+}

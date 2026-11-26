@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Bibliotheca.Backend.Fetchers;
 using Bibliotheca.Backend.Options;
+using Bibliotheca.Backend.Services;
 using Microsoft.Extensions.Options;
 using Microsoft.Playwright;
 
@@ -11,6 +12,7 @@ internal sealed class ExtractorRuntime(IOptions<PlaywrightOptions> options, IHtt
 {
     public const string ClientName = "JavaScriptExtractors";
     private static readonly TimeSpan ExecutionLimit = TimeSpan.FromSeconds(15);
+    private static readonly SemaphoreSlim BrowserSlots = new(4);
     private static readonly TimeSpan CleanupLimit = TimeSpan.FromSeconds(2);
 
     public Task<ExtractorResult?> RunAsync(ExtractorDefinition definition, string operation, string isbn,
@@ -22,7 +24,13 @@ internal sealed class ExtractorRuntime(IOptions<PlaywrightOptions> options, IHtt
         CancellationToken cancellationToken) =>
         RunAsync(definition, "authorBiography", JsonSerializer.Serialize(input, AuthorBiographyResult.JsonOptions),
             (json, session) => AuthorBiographyResult.Parse(json, definition.Manifest, input, session.Source,
-                session.Visited), cancellationToken);
+                session.Visited, session.AuthorEvidence.Keys.ToHashSet()), cancellationToken);
+
+    internal Task<ExternalEdition[]?> RunEditionAsync(ExtractorDefinition definition, string operation, EditionExtractorInput input,
+        CancellationToken cancellationToken) =>
+        RunAsync(definition, operation, JsonSerializer.Serialize(input, AuthorBiographyResult.JsonOptions),
+            (json, session) => JavaScriptEditionProvider.Parse(json, definition.Manifest, input, session.Source),
+            cancellationToken);
 
     private async Task<T?> RunAsync<T>(ExtractorDefinition definition, string operation, string input,
         Func<string, ExtractorSession, T?> parse, CancellationToken cancellationToken) where T : class
@@ -31,9 +39,12 @@ internal sealed class ExtractorRuntime(IOptions<PlaywrightOptions> options, IHtt
         deadline.CancelAfter(ExecutionLimit);
         using var hardStop = new CancellationTokenSource();
         using var registration = deadline.Token.Register(() => hardStop.CancelAfter(CleanupLimit));
-        using var client = clients.CreateClient(ClientName);
+        var slotAcquired = false;
         try
         {
+            await BrowserSlots.WaitAsync(deadline.Token);
+            slotAcquired = true;
+            using var client = clients.CreateClient(ClientName);
             return await WithBrowserAsync(browser =>
                 RunInBrowserAsync(browser, client, definition, operation, input, parse, deadline.Token, logger),
                 hardStop.Token, waitForCleanup: true);
@@ -47,6 +58,10 @@ internal sealed class ExtractorRuntime(IOptions<PlaywrightOptions> options, IHtt
                 throw new TimeoutException("JavaScript extractor exceeded its deadline.");
             }
             throw;
+        }
+        finally
+        {
+            if (slotAcquired) BrowserSlots.Release();
         }
     }
 
@@ -76,9 +91,19 @@ internal sealed class ExtractorRuntime(IOptions<PlaywrightOptions> options, IHtt
             var page = await context.NewPageAsync();
             session = new ExtractorSession(context, page, client, definition.Manifest, operation, sessionStop.Token, logger);
             await session.ConfigureBrowserAsync();
-            var json = await JintExtractorExecutor.EvaluateAsync(definition.Script, operation, input, session.CallAsync, token,
-                definition.Manifest.Id, logger, structuredInput: operation == "authorBiography",
-                hostBindings: ExtractorSession.HostBindings);
+            string json;
+            try
+            {
+                json = await JintExtractorExecutor.EvaluateAsync(definition.Script, operation, input, session.CallAsync, token,
+                    definition.Manifest.Id, logger, structuredInput: operation is "authorBiography" or "editionSearch" or "editionResolve",
+                    hostBindings: ExtractorSession.HostBindings);
+            }
+            catch (Jint.Runtime.PromiseRejectedException exception) when (session.RequestFailure is { } failure && !token.IsCancellationRequested)
+            {
+                throw new HttpRequestException(failure.Message, exception, failure.StatusCode);
+            }
+            if (session.RequestFailure is { } requestFailure && (json is "null" or "[]" || operation == "cover" && session.Cover is null))
+                throw requestFailure;
             try
             {
                 var result = parse(json, session);

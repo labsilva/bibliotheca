@@ -190,6 +190,30 @@ public class JavaScriptExtractorTests
         Assert.Equal([search, wrongProduct, Product, coverUrl], requests);
     }
 
+    [Fact]
+    public void AuthorPhotoMustUseAnApprovedResourceOrigin()
+    {
+        var edition = new Uri(Product);
+        var profile = new Uri(Origin + "/autor/jane-doe/1");
+        var manifest = new ExtractorManifest("bertrand", 1, "extract.js", ["authorBiography"], [Origin],
+            ["https://img.bertrand.pt"], RequireAuthorEvidence: true);
+        var input = new AuthorBiographyInput("Jane Doe", [new(Isbn)]);
+        var visited = new Dictionary<Uri, byte> { [edition] = 0, [profile] = 0 };
+        var observed = new HashSet<(Uri, Uri, string)> { (edition, profile, "janedoe") };
+        var json = $$"""
+            {"name":"Jane Doe","editionIndex":0,"editionUrl":"{{Product}}","isbn":"{{Isbn}}",
+             "photoUrl":"https://img.bertrand.pt/photo.jpg"}
+            """;
+
+        var result = AuthorBiographyResult.Parse(json, manifest, input, profile, visited, observed);
+        Assert.Equal("https://img.bertrand.pt/photo.jpg", result?.PhotoUrl);
+        Assert.Null(result?.Biography);
+        Assert.Null(AuthorBiographyResult.Parse(json.Replace("img.bertrand.pt", "blocked.example"),
+            manifest, input, profile, visited, observed));
+        Assert.Throws<InvalidDataException>(() => AuthorBiographyResult.Parse(json, manifest, input,
+            profile, visited, new HashSet<(Uri, Uri, string)> { (edition, profile, "otherperson") }));
+    }
+
     [ExtractorBrowserFact]
     public async Task BiographyPilotsRequireAConfirmedEditionAndUnambiguousAuthor()
     {
@@ -271,7 +295,7 @@ public class JavaScriptExtractorTests
             var folder = id == "bertrand" ? Path.Combine(AppContext.BaseDirectory, "extractor-fixture") :
                 Path.Combine(AppContext.BaseDirectory, "provider-fixtures", id);
             var script = await File.ReadAllTextAsync(Path.Combine(folder, "extract.js"));
-            var definition = new ExtractorDefinition(new(id, 1, "extract.js", ["authorBiography"], [origin], [origin]), script, 6);
+            var definition = new ExtractorDefinition(new(id, 1, "extract.js", ["authorBiography"], [origin], [origin], RequireAuthorEvidence: true), script, 6);
             var lookup = new JavaScriptAuthorBiographyLookup(definition, runtime);
             AuthorBiographyEdition[] editions = [new(Isbn, id == "wook" ? "livro/example/1" : null)];
 
@@ -378,6 +402,18 @@ public class JavaScriptExtractorTests
         const string origin = "https://www.goodreads.com";
         const string search = origin + "/search?query=" + Isbn;
         const string product = origin + "/book/show/123.Example";
+        const string coverUrl = "https://i.gr-assets.com/fixture.png";
+        var bytes = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
+        const string structured = """
+            <script id="__NEXT_DATA__" type="application/json">
+            {"props":{"pageProps":{"apolloState":{
+              "ROOT_QUERY":{"getBookByLegacyId({\"legacyId\":\"123\"})":{"__ref":"Book:1"}},
+              "Book:1":{"primaryContributorEdge":{"role":"Author","node":{"__ref":"Author:1"}},
+                        "secondaryContributorEdges":[{"role":"Editor","node":{"name":"Exclude"}}]},
+              "Author:1":{"name":"Jane Doe"}
+            }}}}
+            </script>
+            """;
         const string details = """
             <div class="EditionDetails">
               <dl class="DescListItem"><dt>ISBN</dt><dd>9782047330081</dd></dl>
@@ -394,23 +430,28 @@ public class JavaScriptExtractorTests
             </div>
             <div class="BookPageMetadataSection__description">Synopsis</div>
             """;
-        var expectedHtml = description + details;
+        var expectedHtml = description + details + structured;
         var options = Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions());
         var existing = new GoodReadsBookFetcher(Microsoft.Extensions.Options.Options.Create(new FetcherOptions()),
             options, NullLogger<GoodReadsBookFetcher>.Instance).ParseResponse(product, ref expectedHtml);
         var script = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "provider-fixtures", "goodreads", "extract.js"));
-        var definition = new ExtractorDefinition(new("goodreads", 1, "extract.js", ["metadata"], [origin], [origin]), script, 10);
+        var definition = new ExtractorDefinition(new("goodreads", 1, "extract.js", ["metadata", "cover"], [origin], [origin, "https://i.gr-assets.com"]), script, 10);
         var correctEdition = true;
-        var requests = new List<string>();
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var runtime = new ExtractorRuntime(options, new FixtureClientFactory(request =>
         {
             var url = request.RequestUri!.AbsoluteUri;
-            requests.Add(url);
+            requests.Enqueue(url);
             return url switch
             {
                 search => new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(product) } },
-                product => Html(description + """
+                coverUrl => new(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(bytes) { Headers = { ContentType = new("image/png") } }
+                },
+                product => Html(description + structured + """
                     <button aria-label="Book details and editions">Details</button>
+                    <div class="BookCover"><img src="https://i.gr-assets.com/fixture.png"></div>
                     <script>
                     document.querySelector('button').addEventListener('click', () => {
                       document.body.insertAdjacentHTML('beforeend',
@@ -430,10 +471,137 @@ public class JavaScriptExtractorTests
         Assert.Equal(existing.PublishedOn, actual.PublishedOn);
         Assert.Equal(existing.Metadata[FetchedBook.FetchedBookMetadataSynopsis], actual.Metadata[FetchedBook.FetchedBookMetadataSynopsis]);
         Assert.Equal(existing.Metadata[FetchedBook.FetchedBookMetadataLanguage], actual.Metadata[FetchedBook.FetchedBookMetadataLanguage]);
-        Assert.Equal([search, product], requests);
+        Assert.Equal([search, product], requests.Where(url => url != coverUrl).ToArray());
+        var cover = await fetcher.FetchCoverAsync(Isbn, default);
+        Assert.True(cover.Success);
+        Assert.Equal(bytes, cover.Image);
 
         correctEdition = false;
         Assert.False((await fetcher.FetchBookAsync(Isbn, default)).Success);
+        Assert.False((await fetcher.FetchCoverAsync(Isbn, default)).Success);
+    }
+
+    [ExtractorBrowserFact]
+    public async Task ExplicitFallbackHandlesHttpFailureButKeepsAValidNoMatch()
+    {
+        var status = HttpStatusCode.ServiceUnavailable;
+        var runtime = new ExtractorRuntime(Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions()),
+            new FixtureClientFactory(_ => new HttpResponseMessage(status) { Content = new StringContent("") }));
+        var definition = new ExtractorDefinition(new("fixture", 1, "extract.js", ["metadata"], [Origin], [Origin]), """
+            async function extract(host) {
+                await host.goto("https://www.bertrand.pt/");
+                return null;
+            }
+            """, 6);
+        var fallback = new ResultFetcher("""{"isbn":"9782047330081","title":"Legacy"}""");
+        var fetcher = new JavaScriptExtractorFetcher(new JavaScriptExtractor(definition, runtime), 6, fallback);
+
+        Assert.Equal("Legacy", (await fetcher.FetchBookAsync(Isbn, default)).Title);
+        status = HttpStatusCode.NotFound;
+        Assert.False((await fetcher.FetchBookAsync(Isbn, default)).Success);
+    }
+
+    [ExtractorBrowserFact]
+    public async Task ExplicitNavigationCommitsTheApprovedRedirectUrlAndFinalCookies()
+    {
+        const string original = Origin + "/search";
+        const string product = Origin + "/library/book";
+        const string scriptUrl = Origin + "/library/details.js";
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var runtime = new ExtractorRuntime(Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions()),
+            new FixtureClientFactory(request =>
+            {
+                var url = request.RequestUri!.AbsoluteUri;
+                requests.Enqueue(url);
+                if (url == original)
+                    return new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(product) } };
+                if (url == product)
+                {
+                    var response = Html("<script src='details.js'></script>");
+                    response.Headers.TryAddWithoutValidation("Set-Cookie", "fixture=confirmed; Path=/library; Secure; HttpOnly");
+                    return response;
+                }
+                if (url == scriptUrl)
+                {
+                    Assert.Equal(product, request.Headers.Referrer?.AbsoluteUri);
+                    Assert.Contains("fixture=confirmed", request.Headers.GetValues("Cookie"));
+                    return new(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("document.addEventListener('DOMContentLoaded', () => "
+                            + "document.body.innerHTML = '<h1>Example title</h1>');", System.Text.Encoding.UTF8, "text/javascript")
+                    };
+                }
+                throw new InvalidOperationException("Unexpected canonical-navigation request.");
+            }));
+        var definition = new ExtractorDefinition(new("fixture", 1, "extract.js", ["metadata"], [Origin], [Origin]), """
+            async function extract(host, operation, isbn) {
+                await host.goto("https://www.bertrand.pt/search");
+                await host.waitForSelector("h1");
+                return { isbn, title: (await host.text("h1"))[0] };
+            }
+            """, 6);
+        var book = await new JavaScriptExtractorFetcher(definition, runtime).FetchBookAsync(Isbn, default);
+        Assert.Equal("Example title", book.Title);
+        Assert.Equal(product, book.Url);
+        Assert.Equal([original, product, scriptUrl], requests.ToArray());
+    }
+
+    [ExtractorBrowserFact]
+    public async Task WookEditionPackageSearchesAndResolvesExistingIdentifiersWithoutIsbn()
+    {
+        const string origin = "https://www.wook.pt";
+        const string search = origin + "/pesquisa?keyword=Fixture%20Jane%20Doe";
+        const string externalId = "livro/original/123";
+        const string canonical = origin + "/livro/new-slug/123";
+        const string html = """
+            <table><caption><p class="font-medium">Fixture edition</p></caption>
+            <tr><td>Editor:</td><td>Publisher</td></tr></table>
+            """;
+        var script = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "provider-fixtures", "wook", "extract.js"));
+        var definition = new ExtractorDefinition(new("wook", 1, "extract.js",
+            ["editionSearch", "editionResolve"], [origin], [origin]), script, 5);
+        var runtime = new ExtractorRuntime(Microsoft.Extensions.Options.Options.Create(new PlaywrightOptions()),
+            new FixtureClientFactory(request => request.RequestUri!.AbsoluteUri switch
+            {
+                search => Html("""
+                    <main id="search-results"><article><h2><a href="/livro/original/123">Fixture edition</a></h2>
+                    <span class="author">Jane Doe</span><span class="publisher">Publisher</span></article></main>
+                    """),
+                origin + "/" + externalId => new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(canonical) } },
+                canonical => Html(html),
+                _ => throw new InvalidOperationException("Unexpected Wook edition request.")
+            }));
+        var provider = new JavaScriptEditionProvider(definition, runtime, null, false);
+
+        var found = Assert.Single(await provider.SearchAsync("Fixture", "Jane Doe", 1, null, default));
+        Assert.Equal(externalId, found.ExternalId);
+        Assert.Equal("Jane Doe", found.Author);
+        Assert.Null(found.Isbn);
+
+        var resolved = await provider.GetEditionAsync(externalId, null, default);
+        Assert.NotNull(resolved);
+        Assert.Equal(externalId, resolved.ExternalId);
+        Assert.Equal(canonical, resolved.SourceUrl);
+        Assert.Equal("Publisher", resolved.Publisher);
+        Assert.Null(resolved.Isbn);
+    }
+
+    [Fact]
+    public async Task ApiPackageCanSelectVerifiedCandidatesButCannotInventReferences()
+    {
+        var manifest = new ExtractorManifest("googlebooks", 1, "extract.js", ["editionSearch"], [],
+            ["https://www.googleapis.com"]);
+        var definition = new ExtractorDefinition(manifest, """
+            async function extract(host, operation, candidates) {
+                return [candidates.findIndex(candidate => candidate.title === "Keep")];
+            }
+            """, 6);
+        ExternalEdition[] candidates = [new("one", "Skip"), new("two", "Keep")];
+        var selected = await ApiExtractorSelection.SelectAsync(definition, "editionSearch", candidates, default);
+        Assert.Equal(new[] { 1 }, selected);
+        await Assert.ThrowsAsync<InvalidDataException>(() => ApiExtractorSelection.SelectAsync(
+            definition with { Script = "async function extract() { return [42]; }" },
+            "editionSearch", candidates, default));
     }
 
     [ExtractorBrowserFact]

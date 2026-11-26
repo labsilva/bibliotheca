@@ -33,6 +33,12 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        if (args is ["extractors", .. var checkArgs])
+        {
+            Environment.ExitCode = await ExtractorCheckCommand.RunAsync(checkArgs);
+            return;
+        }
+
         NLog.LogManager.Setup().SetupExtensions(extensions => extensions.RegisterLayoutRenderer<SafeLogMessage>("safe-message"));
         var logger = NLog.LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
         Console.WriteLine(FiggleFonts.Ogre.Render("Bibliotheca API"));
@@ -62,24 +68,7 @@ public class Program
             return new SemaphoreSlim(limit, limit);
         });
         builder.Services.AddScoped<IExternalEditionSearch, ExternalEditionSearch>();
-        builder.Services.AddHttpClient(OpenLibraryEditionProvider.ProviderId);
-        builder.Services.AddSingleton<OpenLibraryEditionProvider>();
-        builder.Services.AddSingleton<IExternalEditionProvider>(services => services.GetRequiredService<OpenLibraryEditionProvider>());
-        builder.Services.AddSingleton<IAuthorPhotoLookup>(services => services.GetRequiredService<OpenLibraryEditionProvider>());
-        builder.Services.AddSingleton<IAuthorProfileLookup>(services => services.GetRequiredService<IAuthorPhotoLookup>());
-        builder.Services.AddHttpClient(GoogleBooksEditionProvider.ProviderId)
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
-            .RemoveAllLoggers();
-        builder.Services.AddSingleton<IExternalEditionProvider, GoogleBooksEditionProvider>();
         builder.Services.AddExtractors(builder.Configuration, builder.Environment.ContentRootPath);
-        builder.Services.AddSingleton<IBertrandReader, BertrandReader>();
-        builder.Services.AddSingleton<BertrandCatalogueLookup>();
-        builder.Services.AddSingleton<BertrandAuthorLookup>();
-        builder.Services.AddSingleton<WookPlaywrightPageReader>();
-        builder.Services.AddSingleton<IWookPageReader>(services => services.GetRequiredService<WookPlaywrightPageReader>());
-        builder.Services.AddSingleton<IWookCoverReader>(services => services.GetRequiredService<WookPlaywrightPageReader>());
-        builder.Services.AddSingleton<IWookAuthorLookup, WookAuthorLookup>();
-        builder.Services.AddSingleton<IExternalEditionProvider, WookEditionProvider>();
         builder.Services.AddSignalR();
         builder.Services.AddSingleton<IUserIdProvider, BookImportUserIdProvider>();
         builder.Services.AddSingleton<NotifyFetchedBookService>();

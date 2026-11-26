@@ -7,7 +7,8 @@ namespace Bibliotheca.Backend.Extractors;
 internal sealed record ExtractorManifest(string Id, int ContractVersion, string Entry, string[] Operations,
     string[] NavigationOrigins, string[] ResourceOrigins);
 
-internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Script, int Priority, int? CoverPriority = null)
+internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Script, int Priority, int? CoverPriority = null,
+    bool AuthorBiographyEnabled = false)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -30,14 +31,20 @@ internal sealed record ExtractorDefinition(ExtractorManifest Manifest, string Sc
                 ReadFile(Path.Combine(directory, "manifest.json"), 16_384), JsonOptions);
             if (manifest is null || manifest.Id != id || manifest.ContractVersion != 1 ||
                 manifest.Entry != "extract.js" || manifest.Operations is not { Length: > 0 } ||
-                manifest.Operations.Any(operation => operation is not ("metadata" or "cover")))
+                manifest.Operations.Any(operation => id == "hardcover"
+                    ? operation is not ("editionSearch" or "editionResolve")
+                    : operation is not ("metadata" or "cover") &&
+                        !(operation == "authorBiography" && id is "wook" or "bertrand" or "goodreads")) ||
+                (id == "hardcover" && (manifest.NavigationOrigins is not { Length: 0 } ||
+                    manifest.ResourceOrigins is not ["https://api.hardcover.app"])))
                 throw new InvalidDataException($"Invalid version 1 manifest for extractor '{id}'.");
 
-            ValidateOrigins(manifest.NavigationOrigins, provider.GetSection("NavigationOrigins").Get<string[]>(), true);
+            ValidateOrigins(manifest.NavigationOrigins, provider.GetSection("NavigationOrigins").Get<string[]>(), id != "hardcover");
             ValidateOrigins(manifest.ResourceOrigins, provider.GetSection("ResourceOrigins").Get<string[]>(), false);
             definitions.Add(new(manifest, ReadFile(Path.Combine(directory, manifest.Entry), 131_072),
-                provider.GetValue("Priority", id == "wook" ? 5 : 6),
-                provider.GetValue<int?>("CoverPriority") ?? (id == "wook" ? 0 : null)));
+                provider.GetValue("Priority", id switch { "wook" => 5, "goodreads" => 10, "amazon" => 2, "isbndb" => 100, _ => 6 }),
+                provider.GetValue<int?>("CoverPriority") ?? (id == "wook" ? 0 : null),
+                provider.GetValue<bool>("AuthorBiographyEnabled")));
         }
         return definitions;
     }

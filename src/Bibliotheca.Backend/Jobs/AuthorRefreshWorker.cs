@@ -2,6 +2,7 @@ using System.Data;
 using System.Diagnostics;
 using Bibliotheca.Backend.Data;
 using Bibliotheca.Backend.Fetchers;
+using Bibliotheca.Backend.Extractors;
 using Bibliotheca.Backend.Services;
 using Microsoft.EntityFrameworkCore;
 
@@ -55,6 +56,7 @@ public sealed class AuthorRefreshWorker(IServiceScopeFactory scopes, ILogger<Aut
             AuthorProfile? profile = null;
             WookAuthorResult? wook = null;
             BertrandAuthorResult? bertrand = null;
+            AuthorBiographyResult? goodreads = null;
             item.Error = author is null ? "The author was deleted." : null;
             if (author is not null)
             {
@@ -70,7 +72,11 @@ public sealed class AuthorRefreshWorker(IServiceScopeFactory scopes, ILogger<Aut
                         openFailure = exception;
                         logger.LogWarning("Open Library author refresh failed for {AuthorId}: {FailureType}", author.AuthorId, exception.GetType().Name);
                     }
-                    if (scope.ServiceProvider.GetService<IWookAuthorLookup>() is { } wookLookup)
+                    var biographyExtractors = scope.ServiceProvider.GetServices<IAuthorBiographyLookup>()
+                        .ToDictionary(extractor => extractor.Id, StringComparer.Ordinal);
+                    biographyExtractors.TryGetValue("wook", out var wookExtractor);
+                    var wookLookup = scope.ServiceProvider.GetService<IWookAuthorLookup>();
+                    if (wookLookup is not null || wookExtractor is not null)
                     {
                         var editions = await database.Books.AsNoTracking().Where(book => book.Authors!.Any(a => a.AuthorId == author.AuthorId))
                             .OrderBy(book => book.BookId).Select(book => new WookAuthorEdition(book.Isbn,
@@ -78,28 +84,58 @@ public sealed class AuthorRefreshWorker(IServiceScopeFactory scopes, ILogger<Aut
                                     .OrderBy(r => r.ExternalId).Select(r => r.ExternalId).FirstOrDefault())).ToArrayAsync(timeout.Token);
                         var prioritized = editions.OrderByDescending(e => e.WookId is not null)
                             .ThenByDescending(e => EditionIsbn.Normalize(e.Isbn) is not null).Take(3).ToArray();
-                        try { wook = await wookLookup.FindAsync(author.AuthorName, prioritized, timeout.Token); }
+                        var biography = await FindBiographyAsync(wookExtractor, author,
+                            prioritized.Select(edition => new AuthorBiographyEdition(edition.Isbn, edition.WookId)).ToArray(),
+                            timeout.Token);
+                        try
+                        {
+                            if (wookLookup is not null)
+                                wook = await wookLookup.FindAsync(author.AuthorName, prioritized, timeout.Token);
+                        }
                         catch (Exception exception) when (!timeout.IsCancellationRequested)
                         {
                             logger.LogWarning("Wook author refresh failed for {AuthorId}: {FailureType}", author.AuthorId, exception.GetType().Name);
-                            if (profile is null) item.Error = "Wook author lookup failed.";
+                            if (profile is null && biography is null) item.Error = "Wook author lookup failed.";
                         }
+                        if (biography is { Ambiguous: true })
+                            wook = new(null, null, null, true);
+                        else if (biography?.Biography is { } wookBiography)
+                            wook = new(wook?.PhotoUrl, wookBiography, biography.SourceUrl);
                     }
-                    if (scope.ServiceProvider.GetService<BertrandAuthorLookup>() is { } bertrandLookup)
+                    biographyExtractors.TryGetValue("bertrand", out var bertrandExtractor);
+                    biographyExtractors.TryGetValue("goodreads", out var goodreadsExtractor);
+                    var bertrandLookup = scope.ServiceProvider.GetService<BertrandAuthorLookup>();
+                    if (bertrandLookup is not null || bertrandExtractor is not null || goodreadsExtractor is not null)
                     {
+                        var isbns = await database.Books.AsNoTracking()
+                            .Where(book => book.Isbn != null && book.Authors!.Any(a => a.AuthorId == author.AuthorId))
+                            .GroupBy(book => book.Isbn).OrderBy(group => group.Min(book => book.BookId))
+                            .Select(group => group.Key).Take(3).ToArrayAsync(timeout.Token);
+                        var editions = isbns.Select(isbn => new AuthorBiographyEdition(isbn)).ToArray();
+                        var biography = await FindBiographyAsync(bertrandExtractor, author, editions, timeout.Token);
                         try
                         {
-                            var isbns = await database.Books.AsNoTracking().Where(book => book.Authors!.Any(a => a.AuthorId == author.AuthorId))
-                                .OrderBy(book => book.BookId).Select(book => book.Isbn).Take(3).ToArrayAsync(timeout.Token);
-                            bertrand = await bertrandLookup.FindAsync(author.AuthorName, isbns, timeout.Token);
-                            if (bertrand is not null && item.Error == "Wook author lookup failed.") item.Error = null;
+                            if (bertrandLookup is not null)
+                                bertrand = await bertrandLookup.FindAsync(author.AuthorName, isbns, timeout.Token);
                         }
                         catch (Exception exception) when (!timeout.IsCancellationRequested)
                         {
                             logger.LogWarning("Bertrand author refresh failed for {AuthorId}: {FailureType}", author.AuthorId, exception.GetType().Name);
                         }
+                        if (biography is { Ambiguous: true } && bertrand is not null)
+                            bertrand = bertrand with { Biography = null };
+                        else if (biography?.Biography is { } bertrandBiography)
+                            bertrand = new(bertrandBiography, bertrand?.PhotoUrl, biography.SourceUrl!);
+
+                        if (string.IsNullOrWhiteSpace(author.Biography) &&
+                            string.IsNullOrWhiteSpace(profile?.Biography) && string.IsNullOrWhiteSpace(wook?.Biography) &&
+                            string.IsNullOrWhiteSpace(bertrand?.Biography))
+                            goodreads = await FindBiographyAsync(goodreadsExtractor, author, editions, timeout.Token);
+
+                        if ((bertrand is not null || goodreads?.Biography is not null) && item.Error == "Wook author lookup failed.")
+                            item.Error = null;
                     }
-                    if (openFailure is not null && wook is null && bertrand is null && profile is null)
+                    if (openFailure is not null && wook is null && bertrand is null && profile is null && goodreads?.Biography is null)
                         item.Error = "Author profile providers unavailable.";
                 }
                 catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
@@ -133,11 +169,18 @@ public sealed class AuthorRefreshWorker(IServiceScopeFactory scopes, ILogger<Aut
                 { current.Biography = wook.Biography; current.BiographySourceUrl = wook.SourceUrl; changed = true; }
             }
             if (item.Error is null && current is not null && current.AuthorName == author?.AuthorName &&
-                string.IsNullOrWhiteSpace(current.Biography) && bertrand is { Biography: { Length: > 0 } biography })
-            { current.Biography = biography; current.BiographySourceUrl = bertrand.SourceUrl; changed = true; }
+                string.IsNullOrWhiteSpace(current.Biography) && bertrand is { Biography: { Length: > 0 } bertrandText })
+            { current.Biography = bertrandText; current.BiographySourceUrl = bertrand.SourceUrl; changed = true; }
             if (item.Error is null && current is not null && current.AuthorName == author?.AuthorName &&
                 string.IsNullOrWhiteSpace(current.PhotoUrl) && !string.IsNullOrWhiteSpace(bertrand?.PhotoUrl))
             { current.PhotoUrl = bertrand.PhotoUrl; changed = true; }
+            if (item.Error is null && current is not null && current.AuthorName == author?.AuthorName &&
+                string.IsNullOrWhiteSpace(current.Biography) && goodreads?.Biography is { } goodreadsBiography)
+            {
+                current.Biography = goodreadsBiography;
+                current.BiographySourceUrl = goodreads.SourceUrl;
+                changed = true;
+            }
             if (wook?.Ambiguous == true) item.Error = "Wook author identity is ambiguous.";
             item.Status = item.Error is not null ? "failed" : changed ? "updated" : "unchanged";
             await database.SaveChangesAsync(cancellationToken);
@@ -159,6 +202,25 @@ public sealed class AuthorRefreshWorker(IServiceScopeFactory scopes, ILogger<Aut
                     .SetProperty(row => row.LeaseUntilUtc, (DateTime?)null), release.Token);
             if (released > 0 && !pending)
                 logger.LogInformation("Author refresh {BatchId} completed after {ElapsedMs} ms", batch.Id, (DateTime.UtcNow - batch.CreatedAtUtc).TotalMilliseconds);
+        }
+    }
+
+    private async Task<AuthorBiographyResult?> FindBiographyAsync(IAuthorBiographyLookup? extractor, Author author,
+        IReadOnlyList<AuthorBiographyEdition> editions, CancellationToken token)
+    {
+        if (extractor is null) return null;
+        try
+        {
+            var result = await extractor.FindAsync(author.AuthorName, editions, token);
+            logger.LogInformation("Author biography extractor {ExtractorId} for {AuthorId}: {Outcome}",
+                extractor.Id, author.AuthorId, result is null ? "no match" : result.Ambiguous ? "ambiguous" : "matched");
+            return result;
+        }
+        catch (Exception exception) when (!token.IsCancellationRequested)
+        {
+            logger.LogWarning("Author biography extractor {ExtractorId} failed for {AuthorId}: {FailureType}",
+                extractor.Id, author.AuthorId, exception.GetType().Name);
+            return null;
         }
     }
 

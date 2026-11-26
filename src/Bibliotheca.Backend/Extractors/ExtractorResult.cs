@@ -23,7 +23,9 @@ internal sealed record ExtractorResult(string Isbn, string Title, string[]? Auth
     {
         var result = JsonSerializer.Deserialize<ExtractorResult>(json, JsonOptions);
         if (result is null) return null;
-        if (source is null || EditionIsbn.Normalize(result.Isbn) != expected ||
+        if (EditionIsbn.Normalize(result.Isbn) != expected)
+            throw new InvalidDataException("Extractor returned a mismatched ISBN.");
+        if (source is null ||
             string.IsNullOrWhiteSpace(result.Title) || result.Title.Length > 512 ||
             result.Authors is { Length: > 64 } ||
             result.Authors?.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 256) == true ||
@@ -65,6 +67,7 @@ internal sealed class JavaScriptExtractorFetcher(ExtractorDefinition definition,
     : IBookFetcher, ICoverFetcher, IFetcherPriority
 {
     public int Priority => definition.Priority;
+    internal string Id => definition.Manifest.Id;
 
     public async Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken token) =>
         (await RunAsync("metadata", isbn, token))?.ToBook() ?? new() { Success = false };

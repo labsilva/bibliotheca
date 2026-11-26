@@ -21,6 +21,7 @@ services:
       Extractors__Providers__bertrand__Priority: "6"
       Extractors__Providers__bertrand__NavigationOrigins__0: https://www.bertrand.pt
       Extractors__Providers__bertrand__ResourceOrigins__0: https://www.bertrand.pt
+      Extractors__Providers__bertrand__ResourceOrigins__1: https://img.bertrand.pt
 ```
 
 Apply the override using the same Compose files and project name as the
@@ -51,6 +52,75 @@ edition providers still handle those operations.
 Replace `extractors/wook/extract.js` and restart the API to update the pilot.
 Restore the previous script and restart to roll back, or remove the Wook
 enable setting and recreate the service to return to the built-in fetchers.
+
+## Enable the Goodreads pilot
+
+Mount the same extractor directory and enable the metadata-only pilot.
+
+```yaml
+environment:
+  Extractors__Providers__goodreads__Enabled: "true"
+  Extractors__Providers__goodreads__NavigationOrigins__0: https://www.goodreads.com
+  Extractors__Providers__goodreads__ResourceOrigins__0: https://www.goodreads.com
+```
+
+The pilot opens the edition details and verifies the returned ISBN. It reads
+the visible contributor credits and excludes labelled illustrators. Goodreads
+responses that require an access challenge still need live validation.
+
+## Enable the Amazon and ISBNdb cover pilots
+
+Enable either pilot with the following origin approvals. The Amazon pilot
+requires a search-result ASIN matching the requested ISBN or its equivalent
+ISBN-10. ISBNdb requires a matching ISBN on the product page. Both open the
+image through Playwright and preserve their existing fallback priorities.
+
+```yaml
+environment:
+  Extractors__Providers__amazon__Enabled: "true"
+  Extractors__Providers__amazon__NavigationOrigins__0: https://www.amazon.com
+  Extractors__Providers__amazon__ResourceOrigins__0: https://m.media-amazon.com
+  Extractors__Providers__amazon__ResourceOrigins__1: https://images-na.ssl-images-amazon.com
+  Extractors__Providers__isbndb__Enabled: "true"
+  Extractors__Providers__isbndb__NavigationOrigins__0: https://isbndb.com
+  Extractors__Providers__isbndb__ResourceOrigins__0: https://isbndb.com
+  Extractors__Providers__isbndb__ResourceOrigins__1: https://images.isbndb.com
+```
+
+## Enable the Hardcover edition pilot
+
+Keep the [Hardcover search settings and deployment secret](../README.md#external-edition-search)
+and add these extractor settings.
+
+```yaml
+environment:
+  Extractors__Providers__hardcover__Enabled: "true"
+  Extractors__Providers__hardcover__ResourceOrigins__0: https://api.hardcover.app
+```
+
+The script runs in Jint for title and author searches and edition resolution.
+Its `host.hardcover()` calls select from fixed backend operations. The backend
+owns the GraphQL queries, endpoint, credentials, rate limit and edition
+records. The script receives candidate references and can only select
+records returned for that search. This pilot uses HTTP and does not start
+Playwright. Removing the extractor setting restores the built-in ordering.
+
+## Enable author biographies
+
+Once a provider is enabled, opt in to biography extraction independently by
+setting `Extractors__Providers__wook__AuthorBiographyEnabled`,
+`Extractors__Providers__bertrand__AuthorBiographyEnabled` or
+`Extractors__Providers__goodreads__AuthorBiographyEnabled` to `true`.
+Run an author refresh to exercise the pilot.
+
+The `authorBiography` operation receives a name and up to three known editions.
+It follows a matching credit from a verified edition to its profile and returns
+the name, biography and edition evidence. The backend validates the evidence,
+takes the source URL from the observed navigation and records plain text.
+Multiple distinct profiles for the same name produce an ambiguous result.
+The worker continues to apply the existing refresh and fallback policies.
+Goodreads fills a missing biography after the other sources have been tried.
+Author photos still use the existing providers.
 
 ## Update or roll back on the Raspberry Pi
 
@@ -106,6 +176,19 @@ redirect, so use explicit navigation for pages that depend on the redirected
 URL for relative links or scripts. Service workers and WebSockets are blocked.
 The backend owns the execution deadline, result validation, priority,
 fallback and persistence.
+
+## Diagnose an extraction
+
+The metadata and cover services log attempts and the provider that supplied
+each result. Set the `Bibliotheca.Backend.Extractors.ExtractorRuntime`
+logger to Debug to see evaluation timing and policy decisions, or Trace to
+include host operation names and response lengths. The logs omit page
+contents and credentials.
+
+The VM runs on a dedicated thread, while asynchronous browser operations
+run separately. This keeps the Jint allocation budget independent of
+HTML and network processing on the host. Up to four evaluations can run
+at once. Waiting for a slot counts toward the execution deadline.
 
 The backend test suite exercises the manifest, redirect policy and result
 contract. Install the Chromium version that matches the backend Playwright

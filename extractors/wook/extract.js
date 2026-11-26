@@ -91,17 +91,20 @@ async function readProduct(host, isbn) {
     };
 }
 
-async function extract(host, operation, isbn) {
-    const search = await host.goto(origin + "/pesquisa?keyword=" + isbn);
-    if (!search) return null;
-
-    const read = async () => {
-        const product = await readProduct(host, isbn);
+async function extract(host, operation, input) {
+    if (operation === "authorBiography") return await extractBiography(host, input);
+    return await findProduct(host, input, async () => {
+        const product = await readProduct(host, input);
         if (!product || operation === "cover" &&
             (!product.image || !await host.downloadImage(product.image, "navigate"))) return null;
         return product.metadata;
-    };
-    if (productAddress(search)) return await read();
+    });
+}
+
+async function findProduct(host, isbn, read) {
+    const search = await host.goto(origin + "/pesquisa?keyword=" + isbn);
+    if (!search) return null;
+    if (productAddress(search)) return await read(search);
 
     const results = "#search-results, .search-results, #product-list, .product-list, .product-listing";
     const resultLinks = " a[href]:not(:is(header *, footer *, nav *, aside *))";
@@ -115,9 +118,77 @@ async function extract(host, operation, isbn) {
         if (key && !candidates.has(key)) candidates.set(key, candidate);
     }
     for (const [key, candidate] of [...candidates].slice(0, 5)) {
-        if (productAddress(await host.goto(candidate))?.split("/").at(-1) !== key) continue;
-        const result = await read();
+        const actual = await host.goto(candidate);
+        if (productAddress(actual)?.split("/").at(-1) !== key) continue;
+        const result = await read(actual);
         if (result) return result;
     }
     return null;
+}
+
+
+function authorKey(value) {
+    return (value ?? "").normalize("NFD").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function biographyText(value) {
+    const text = value?.replace(/\s+/g, " ").trim();
+    return text && text.length <= 16384 ? text : null;
+}
+
+function authorAddress(value) {
+    const path = value?.replace(/^https:\/\/www\.wook\.pt(?=\/)/i, "").split(/[?#]/, 1)[0];
+    const match = /^(\/autor\/[^/]+\/(\d+))(?:\/\d+)?\/?$/.exec(path ?? "");
+    return match ? { url: origin + match[1], id: match[2] } : null;
+}
+
+async function extractBiography(host, input) {
+    const expected = authorKey(input.name);
+    const candidates = new Map();
+    for (const [editionIndex, edition] of input.editions.entries()) {
+        const read = async editionUrl => {
+            const isbn = edition.isbn;
+            if (isbn) {
+                const table = "table tr:has(> :first-child:is(:text-is('ISBN'), :text-is('ISBN:'))) > :nth-child(2)";
+                const observed = (await host.text(table))[0]?.trim() ??
+                    (await host.attribute("[itemprop='isbn'], meta[property='book:isbn']", "content"))[0]?.trim() ??
+                    (await host.text("[itemprop='isbn']"))[0]?.trim();
+                if (normalizedIsbn(observed) !== isbn) return null;
+            }
+
+            const selector = "table caption :is(.author, .authors) a[href^='#author-']";
+            const names = await host.text(selector);
+            const anchors = await host.attribute(selector, "href");
+            const links = (await host.attribute("a[href*='/autor/']", "href")).map(authorAddress).filter(Boolean);
+            let matched = false;
+            for (const [index, name] of names.entries()) {
+                if (authorKey(name) !== expected) continue;
+                const id = /^#author-(\d+)$/.exec(anchors[index] ?? "")?.[1];
+                if (!id) continue;
+                const profiles = new Set(links.filter(link => link.id === id).map(link => link.url));
+                if (profiles.size > 1) return { ambiguous: true };
+                if (profiles.size === 1) {
+                    matched = true;
+                    candidates.set(id, { address: profiles.values().next().value, editionIndex, editionUrl, isbn });
+                }
+            }
+            return matched ? { matched: true } : null;
+        };
+        const known = edition.externalId && productAddress("/" + edition.externalId.replace(/^\/+/, ""));
+        let found = null;
+        if (known) {
+            const actual = await host.goto(known);
+            if (productAddress(actual)?.split("/").at(-1) === known.split("/").at(-1)) found = await read(actual);
+        }
+        if (!found && edition.isbn) found = await findProduct(host, edition.isbn, read);
+        if (found?.ambiguous || candidates.size > 1) return { ambiguous: true };
+    }
+    if (candidates.size !== 1) return null;
+    const [id, { address, ...proof }] = candidates.entries().next().value;
+    if (authorAddress(await host.goto(address))?.id !== id) return null;
+    const person = '[itemtype="https://schema.org/Person"]';
+    const name = (await host.text(person + " h1[itemprop='name']"))[0]?.trim();
+    if (authorKey(name) !== expected) return null;
+    const biography = biographyText((await host.text(person + " [itemprop='description'] .bio-text"))[0]);
+    return biography ? { ...proof, name, biography } : null;
 }

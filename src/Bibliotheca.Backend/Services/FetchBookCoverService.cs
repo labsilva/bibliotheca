@@ -25,7 +25,7 @@ public class FetchBookCoverService : FetcherBaseService, IServiceExecutor<FetchB
         foreach (var coverFetcher in fetchers)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var fetcherName = coverFetcher.GetType().Name;
+            var fetcherName = coverFetcher is Extractors.JavaScriptExtractorFetcher extractor ? extractor.Id : coverFetcher.GetType().Name;
             _logger.LogInformation("Trying {fetcher}", fetcherName);
             try
             {
@@ -35,6 +35,7 @@ public class FetchBookCoverService : FetcherBaseService, IServiceExecutor<FetchB
                     _logger.LogInformation("Cover fetched from {fetcher}", fetcherName);
                     break;
                 }
+                _logger.LogInformation("No cover returned by {fetcher}", fetcherName);
             }
             catch (Exception ex)
             {

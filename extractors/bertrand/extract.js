@@ -43,7 +43,8 @@ async function readProduct(host, isbn) {
             const candidate = item.isbn ?? item.gtin13 ?? item.gtin;
             const title = text(item.name);
             if (normalizedIsbn(candidate) !== isbn || !title) continue;
-            const authors = (Array.isArray(item.author) ? item.author : [item.author]).map(name).filter(Boolean);
+            const credits = Array.isArray(item.author) ? item.author : [item.author];
+            const authors = credits.map(name).filter(Boolean);
             const date = text(item.datePublished);
             const pages = Number(item.numberOfPages);
             return {
@@ -57,6 +58,7 @@ async function readProduct(host, isbn) {
                     language: text(item.inLanguage),
                     pages: Number.isSafeInteger(pages) && pages > 0 ? pages : undefined
                 },
+                credits,
                 image: text(item.image) ?? text(item.image?.url)
             };
         }
@@ -64,14 +66,16 @@ async function readProduct(host, isbn) {
     return null;
 }
 
-async function extract(host, operation, isbn) {
-    const origin = "https://www.bertrand.pt";
+const origin = "https://www.bertrand.pt";
+
+async function findProduct(host, isbn) {
     const search = await host.goto(origin + "/pesquisa/" + isbn);
     if (!search) return null;
 
     let product = null;
     if (isProduct(search)) {
         product = await readProduct(host, isbn);
+        if (product) product.url = search;
     } else {
         const links = await host.attribute("a[href*='/livro/']", "href");
         const candidates = new Set();
@@ -80,12 +84,71 @@ async function extract(host, operation, isbn) {
             if (isProduct(absolute)) candidates.add(absolute.split(/[?#]/, 1)[0]);
         }
         for (const candidate of [...candidates].slice(0, 10)) {
-            if (!isProduct(await host.goto(candidate))) continue;
+            const actual = await host.goto(candidate);
+            if (!isProduct(actual)) continue;
             product = await readProduct(host, isbn);
-            if (product) break;
+            if (product) {
+                product.url = actual;
+                break;
+            }
         }
     }
+    return product;
+}
+
+async function extract(host, operation, input) {
+    if (operation === "authorBiography") return await extractBiography(host, input);
+    const product = await findProduct(host, input);
     if (!product) return null;
-    if (operation === "cover" && (!product.image || !await host.downloadImage(product.image))) return null;
+    if (operation === "cover") {
+        const mode = /^https:\/\/img\.bertrand\.pt\//i.test(product.image ?? "") ? "navigate" : "";
+        if (!product.image || !await host.downloadImage(product.image, mode)) return null;
+    }
     return product.metadata;
+}
+
+
+function authorKey(value) {
+    return (value ?? "").normalize("NFD").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function biographyText(value) {
+    const text = value?.replace(/\s+/g, " ").trim();
+    return text && text.length <= 16384 ? text : null;
+}
+
+function authorAddress(value) {
+    const path = value?.replace(/^https:\/\/www\.bertrand\.pt(?=\/)/i, "").split(/[?#]/, 1)[0];
+    return /^\/autor\/[^/]+\/\d+\/?$/.test(path) ? origin + path.replace(/\/$/, "") : null;
+}
+
+async function extractBiography(host, input) {
+    const expected = authorKey(input.name);
+    const candidates = new Map();
+    for (const [editionIndex, edition] of input.editions.entries()) {
+        const product = edition.isbn && await findProduct(host, edition.isbn);
+        if (!product) continue;
+        for (const credit of product.credits) {
+            if (authorKey(name(credit)) !== expected) continue;
+            const address = authorAddress(text(credit?.url));
+            if (!address) continue;
+            candidates.set(address.split("/").at(-1), {
+                address, editionIndex, editionUrl: product.url, isbn: product.metadata.isbn
+            });
+        }
+        if (candidates.size > 1) return { ambiguous: true };
+    }
+    if (candidates.size !== 1) return null;
+    const { address, ...proof } = candidates.values().next().value;
+    if (authorAddress(await host.goto(address)) !== address) return null;
+    for (const block of await host.text("script[type='application/ld+json']")) {
+        let data;
+        try { data = JSON.parse(block); } catch { continue; }
+        for (const person of records(data)) {
+            if (person["@type"] !== "Person" || authorKey(text(person.name)) !== expected) continue;
+            const biography = biographyText(text(person.description));
+            if (biography) return { ...proof, name: person.name, biography };
+        }
+    }
+    return null;
 }

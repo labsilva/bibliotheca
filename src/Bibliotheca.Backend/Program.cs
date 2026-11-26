@@ -71,9 +71,15 @@ public class Program
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
             .RemoveAllLoggers();
         builder.Services.AddSingleton<IExternalEditionProvider, GoogleBooksEditionProvider>();
+        var extractors = ExtractorDefinition.Load(builder.Configuration.GetSection("Extractors"),
+            builder.Environment.ContentRootPath);
+        var hardcoverExtractor = extractors.SingleOrDefault(extractor => extractor.Manifest.Id == HardcoverEditionProvider.ProviderId);
         builder.Services.AddHttpClient(HardcoverEditionProvider.ProviderId)
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
-        builder.Services.AddSingleton<IExternalEditionProvider, HardcoverEditionProvider>();
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
+            .RemoveAllLoggers();
+        builder.Services.AddSingleton<IExternalEditionProvider>(services => new HardcoverEditionProvider(
+            services.GetRequiredService<IHttpClientFactory>(), hardcoverExtractor,
+            services.GetRequiredService<ILogger<HardcoverEditionProvider>>()));
         builder.Services.AddSingleton<IBertrandReader, BertrandReader>();
         builder.Services.AddSingleton<BertrandCatalogueLookup>();
         builder.Services.AddSingleton<BertrandAuthorLookup>();
@@ -285,14 +291,15 @@ public class Program
 
         // Fetchers
         builder.Services.AddHttpClient<CoverDownloader>();
-        var extractors = ExtractorDefinition.Load(builder.Configuration.GetSection("Extractors"),
-            builder.Environment.ContentRootPath);
         builder.Services.AddHttpClient(ExtractorRuntime.ClientName)
             .ConfigurePrimaryHttpMessageHandler(ExtractorTransport.CreateHandler)
             .RemoveAllLoggers();
         builder.Services.AddSingleton<ExtractorRuntime>();
         foreach (var extractor in extractors)
         {
+            if (extractor.AuthorBiographyEnabled && extractor.Manifest.Operations.Contains("authorBiography"))
+                builder.Services.AddSingleton<IAuthorBiographyLookup>(services =>
+                    new JavaScriptAuthorBiographyLookup(extractor, services.GetRequiredService<ExtractorRuntime>()));
             if (extractor.Manifest.Operations.Contains("metadata"))
                 builder.Services.AddSingleton<IBookFetcher>(services =>
                     new JavaScriptExtractorFetcher(extractor, services.GetRequiredService<ExtractorRuntime>()));
@@ -307,13 +314,16 @@ public class Program
             scan.FromAssemblyOf<Program>()
                 .AddClasses(classes => classes.AssignableTo<IBookFetcher>().Where(type =>
                     (type != typeof(BertrandBookFetcher) || !HasExtractor("bertrand", "metadata")) &&
-                    (type != typeof(WookBookFetcher) || !HasExtractor("wook", "metadata"))))
+                    (type != typeof(WookBookFetcher) || !HasExtractor("wook", "metadata")) &&
+                    (type != typeof(GoodReadsBookFetcher) || !HasExtractor("goodreads", "metadata"))))
                 .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()
                 .AddClasses(classes => classes.AssignableTo<ICoverFetcher>().Where(type =>
                     (type != typeof(BertrandCoverFetcher) || !HasExtractor("bertrand", "cover")) &&
-                    (type != typeof(WookCoverFetcher) || !HasExtractor("wook", "cover"))))
+                    (type != typeof(WookCoverFetcher) || !HasExtractor("wook", "cover")) &&
+                    (type != typeof(AmazonCoverFetcher) || !HasExtractor("amazon", "cover")) &&
+                    (type != typeof(IsbndbCoverFetcher) || !HasExtractor("isbndb", "cover"))))
                 .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()

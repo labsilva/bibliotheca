@@ -1,0 +1,8 @@
+{
+  "id": "hardcover",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["editionSearch", "editionResolve"],
+  "navigationOrigins": [],
+  "resourceOrigins": ["https://api.hardcover.app"]
+}

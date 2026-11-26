@@ -5,10 +5,12 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Bibliotheca.Backend.Fetchers;
+using Bibliotheca.Backend.Extractors;
 
 namespace Bibliotheca.Backend.Services;
 
-internal sealed class HardcoverEditionProvider(IHttpClientFactory clients)
+internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, ExtractorDefinition? extractor = null,
+    ILogger<HardcoverEditionProvider>? logger = null)
     : IExternalEditionProvider, IExternalEditionResolver, IDisposable
 {
     public const string ProviderId = "hardcover";
@@ -60,23 +62,84 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients)
         string title, string? author, int limit, string? credential, CancellationToken cancellationToken)
     {
         var phrase = string.IsNullOrWhiteSpace(author) ? title : $"{title} {author}";
-        var workLimit = Math.Min(5, limit);
         using var client = clients.CreateClient(ProviderId);
+        if (extractor?.Manifest.Operations.Contains("editionSearch") == true)
+            return await ExtractSearchAsync(client, phrase, limit, credential, cancellationToken);
+
+        var ids = await SearchWorksAsync(client, phrase, Math.Min(5, limit), credential, cancellationToken);
+        if (ids.Length == 0) return [];
+
+        var books = await ReadEditionsAsync(client, ids, limit, credential, cancellationToken);
+        var workOrder = ids.Select((id, index) => (id, index)).ToDictionary(item => item.id, item => item.index);
+        return books.OrderBy(book => workOrder[book.Id])
+            .SelectMany(book => book.Editions ?? []).Select(ToEdition).OfType<ExternalEdition>().Take(limit).ToArray();
+    }
+
+    private async Task<IReadOnlyList<ExternalEdition>> ExtractSearchAsync(HttpClient client, string phrase, int limit,
+        string? credential, CancellationToken token)
+    {
+        int[] ids = [];
+        List<ExternalEdition> candidates = [];
+        var stage = 0;
+        var json = await ExtractorRuntime.EvaluateAsync(extractor!.Script, "editionSearch", "", CallAsync, token,
+            ProviderId, logger);
+        var selection = JsonSerializer.Deserialize<int[]>(json);
+        if ((Volatile.Read(ref stage) != 4 && (Volatile.Read(ref stage) != 2 || ids.Length != 0)) ||
+            selection is null || selection.Length > candidates.Count ||
+            selection.Any(index => (uint)index >= candidates.Count) || selection.Distinct().Count() != selection.Length)
+            throw new InvalidDataException("Hardcover extractor selected an invalid edition.");
+
+        return selection.Take(limit).Select(index => candidates[index]).ToArray();
+
+        async Task<string> CallAsync(string method, string action, string argument)
+        {
+            token.ThrowIfCancellationRequested();
+            if (method == "hardcover" && argument.Length == 0)
+            {
+                if (action == "search" && Interlocked.CompareExchange(ref stage, 1, 0) == 0)
+                {
+                    ids = await SearchWorksAsync(client, phrase, Math.Min(5, limit), credential, token);
+                    Volatile.Write(ref stage, 2);
+                    return JsonSerializer.Serialize(ids);
+                }
+                if (action == "editions" && Interlocked.CompareExchange(ref stage, 3, 2) == 2 && ids.Length > 0)
+                {
+                    var books = await ReadEditionsAsync(client, ids, limit, credential, token);
+                    var groups = books.GroupBy(book => book.Id).Select(work => new
+                    {
+                        id = work.Key,
+                        editions = work.SelectMany(book => book.Editions ?? []).Select(ToEdition).OfType<ExternalEdition>().Select(edition =>
+                        {
+                            candidates.Add(edition);
+                            return candidates.Count - 1;
+                        }).ToArray()
+                    }).ToArray();
+                    Volatile.Write(ref stage, 4);
+                    return JsonSerializer.Serialize(groups);
+                }
+            }
+            throw new InvalidDataException("Invalid Hardcover extractor operation.");
+        }
+    }
+
+    private async Task<int[]> SearchWorksAsync(HttpClient client, string phrase, int workLimit, string? credential,
+        CancellationToken token)
+    {
         var search = await QueryAsync<SearchData>(client, SearchQuery, new { query = phrase, limit = workLimit },
-            credential, cancellationToken);
+            credential, token);
         if (!string.IsNullOrWhiteSpace(search.Search?.Error))
             throw new HttpRequestException("Hardcover could not perform the search.");
 
-        var ids = (search.Search?.Ids ?? []).OfType<int>().Where(id => id > 0).Distinct().Take(workLimit).ToArray();
-        if (ids.Length == 0)
-            return [];
+        return (search.Search?.Ids ?? []).OfType<int>().Where(id => id > 0).Distinct().Take(workLimit).ToArray();
+    }
 
+    private async Task<Work[]> ReadEditionsAsync(HttpClient client, int[] ids, int limit, string? credential,
+        CancellationToken token)
+    {
         var editionLimit = (limit + ids.Length - 1) / ids.Length;
         var result = await QueryAsync<BooksData>(client, SearchEditionsQuery, new { ids, limit = editionLimit },
-            credential, cancellationToken);
-        var workOrder = ids.Select((id, index) => (id, index)).ToDictionary(item => item.id, item => item.index);
-        return (result.Books ?? []).Where(book => workOrder.ContainsKey(book.Id)).OrderBy(book => workOrder[book.Id])
-            .SelectMany(book => book.Editions ?? []).Select(ToEdition).OfType<ExternalEdition>().Take(limit).ToArray();
+            credential, token);
+        return (result.Books ?? []).Where(book => ids.Contains(book.Id)).ToArray();
     }
 
     public async Task<ExternalEdition?> GetEditionAsync(
@@ -86,7 +149,34 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients)
             return null;
 
         using var client = clients.CreateClient(ProviderId);
-        var result = await QueryAsync<EditionData>(client, ResolveEditionQuery, new { id }, credential, cancellationToken);
+        if (extractor?.Manifest.Operations.Contains("editionResolve") != true)
+            return await ReadEditionAsync(client, id, credential, cancellationToken);
+
+        ExternalEdition? edition = null;
+        var called = 0;
+        var json = await ExtractorRuntime.EvaluateAsync(extractor.Script, "editionResolve", "", CallAsync,
+            cancellationToken, ProviderId, logger);
+        var selection = JsonSerializer.Deserialize<int?>(json);
+        if (Volatile.Read(ref called) != 2 || selection != (edition is null ? null : (int?)id))
+            throw new InvalidDataException("Hardcover extractor resolved an invalid edition.");
+        return edition;
+
+        async Task<string> CallAsync(string method, string action, string argument)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (method != "hardcover" || action != "resolve" || argument.Length != 0 ||
+                Interlocked.CompareExchange(ref called, 1, 0) != 0)
+                throw new InvalidDataException("Invalid Hardcover extractor operation.");
+            edition = await ReadEditionAsync(client, id, credential, cancellationToken);
+            Volatile.Write(ref called, 2);
+            return edition is null ? "null" : id.ToString(CultureInfo.InvariantCulture);
+        }
+    }
+
+    private async Task<ExternalEdition?> ReadEditionAsync(HttpClient client, int id, string? credential,
+        CancellationToken token)
+    {
+        var result = await QueryAsync<EditionData>(client, ResolveEditionQuery, new { id }, credential, token);
         return result.Edition?.Id == id ? ToEdition(result.Edition) : null;
     }
 
@@ -108,6 +198,7 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients)
         request.Headers.UserAgent.ParseAdd("Bibliotheca/1.0");
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
+        await response.Content.LoadIntoBufferAsync(2 * 1024 * 1024, cancellationToken);
         var envelope = await response.Content.ReadFromJsonAsync<Envelope<T>>(cancellationToken);
         if (envelope?.Data is null || envelope.Errors is { Length: > 0 })
             throw new HttpRequestException("Hardcover returned a GraphQL error.");

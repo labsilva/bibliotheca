@@ -390,6 +390,42 @@ public partial class HttpApplicationTests(Xunit.Abstractions.ITestOutputHelper o
         }
     }
 
+    [Fact]
+    public async Task HardcoverScriptUsesTheSearchAndResolveEndpointsThroughTheExistingProvider()
+    {
+        var directory = Directory.CreateTempSubdirectory("bibliotheca-hardcover-pilot-");
+        try
+        {
+            await using var baseFactory = CreateFactory(directory);
+            await using var factory = baseFactory.WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
+                    new Dictionary<string, string?>
+                    {
+                        ["Extractors:Directory"] = Path.Combine(AppContext.BaseDirectory, "provider-fixtures"),
+                        ["Extractors:Providers:hardcover:Enabled"] = "true",
+                        ["Extractors:Providers:hardcover:ResourceOrigins:0"] = "https://api.hardcover.app"
+                    }));
+                builder.ConfigureTestServices(services => services.AddHttpClient("hardcover")
+                    .ConfigurePrimaryHttpMessageHandler(() => new HardcoverHandler()));
+            });
+            var provider = Assert.Single(factory.Services.GetServices<IExternalEditionProvider>(), item => item.Id == "hardcover");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var edition = Assert.Single(await provider.SearchAsync("Matilda", "Roald Dahl", 5, "fixture-token", timeout.Token));
+            Assert.Equal("10", edition.ExternalId);
+            Assert.Equal("Matilda", edition.Title);
+            var resolved = await Assert.IsAssignableFrom<IExternalEditionResolver>(provider)
+                .GetEditionAsync("10", "fixture-token", timeout.Token);
+            Assert.NotNull(resolved);
+            Assert.Equal(edition with { Details = null }, resolved with { Details = null });
+            Assert.Equal(new[] { "Roald Dahl", "Example Coauthor" }, resolved.Details!.Authors);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
     private sealed class HardcoverHandler : HttpMessageHandler
     {
         private const string Edition = """

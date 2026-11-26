@@ -1,5 +1,6 @@
 using Bibliotheca.Backend.Authorization;
 using Bibliotheca.Backend.Data;
+using Bibliotheca.Backend.Extractors;
 using Microsoft.AspNetCore.Authorization;
 using Bibliotheca.Backend.Fetchers;
 using Bibliotheca.Backend.Hubs;
@@ -32,6 +33,12 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        if (args is ["extractors", .. var checkArgs])
+        {
+            Environment.ExitCode = await ExtractorCheckCommand.RunAsync(checkArgs);
+            return;
+        }
+
         NLog.LogManager.Setup().SetupExtensions(extensions => extensions.RegisterLayoutRenderer<SafeLogMessage>("safe-message"));
         var logger = NLog.LogManager.Setup().LoadConfigurationFromAppSettings().GetCurrentClassLogger();
         Console.WriteLine(FiggleFonts.Ogre.Render("Bibliotheca API"));
@@ -61,26 +68,7 @@ public class Program
             return new SemaphoreSlim(limit, limit);
         });
         builder.Services.AddScoped<IExternalEditionSearch, ExternalEditionSearch>();
-        builder.Services.AddHttpClient(OpenLibraryEditionProvider.ProviderId);
-        builder.Services.AddSingleton<OpenLibraryEditionProvider>();
-        builder.Services.AddSingleton<IExternalEditionProvider>(services => services.GetRequiredService<OpenLibraryEditionProvider>());
-        builder.Services.AddSingleton<IAuthorPhotoLookup>(services => services.GetRequiredService<OpenLibraryEditionProvider>());
-        builder.Services.AddSingleton<IAuthorProfileLookup>(services => services.GetRequiredService<IAuthorPhotoLookup>());
-        builder.Services.AddHttpClient(GoogleBooksEditionProvider.ProviderId)
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false })
-            .RemoveAllLoggers();
-        builder.Services.AddSingleton<IExternalEditionProvider, GoogleBooksEditionProvider>();
-        builder.Services.AddHttpClient(HardcoverEditionProvider.ProviderId)
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
-        builder.Services.AddSingleton<IExternalEditionProvider, HardcoverEditionProvider>();
-        builder.Services.AddSingleton<IBertrandReader, BertrandReader>();
-        builder.Services.AddSingleton<BertrandCatalogueLookup>();
-        builder.Services.AddSingleton<BertrandAuthorLookup>();
-        builder.Services.AddSingleton<WookPlaywrightPageReader>();
-        builder.Services.AddSingleton<IWookPageReader>(services => services.GetRequiredService<WookPlaywrightPageReader>());
-        builder.Services.AddSingleton<IWookCoverReader>(services => services.GetRequiredService<WookPlaywrightPageReader>());
-        builder.Services.AddSingleton<IWookAuthorLookup, WookAuthorLookup>();
-        builder.Services.AddSingleton<IExternalEditionProvider, WookEditionProvider>();
+        builder.Services.AddExtractors(builder.Configuration, builder.Environment.ContentRootPath);
         builder.Services.AddSignalR();
         builder.Services.AddSingleton<IUserIdProvider, BookImportUserIdProvider>();
         builder.Services.AddSingleton<NotifyFetchedBookService>();
@@ -282,16 +270,6 @@ public class Program
             options.AddInterceptors(new DiacriticsInterceptor());
         });
 
-        // Fetchers
-        builder.Services.AddHttpClient<CoverDownloader>();
-        builder.Services.Scan(scan =>
-            scan.FromAssemblyOf<Program>()
-                .AddClasses(classes => classes.AssignableTo<IBookFetcher>())
-                .AsSelfWithInterfaces());
-        builder.Services.Scan(scan =>
-            scan.FromAssemblyOf<Program>()
-                .AddClasses(classes => classes.AssignableTo<ICoverFetcher>())
-                .AsSelfWithInterfaces());
         builder.Services.Scan(scan =>
             scan.FromAssemblyOf<Program>()
                 .AddClasses(classes => classes.AssignableTo(typeof(IServiceExecutor<,>)))

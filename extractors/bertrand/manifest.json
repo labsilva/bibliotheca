@@ -1,0 +1,9 @@
+{
+  "id": "bertrand",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["metadata", "cover", "authorBiography"],
+  "navigationOrigins": ["https://www.bertrand.pt"],
+  "resourceOrigins": ["https://www.bertrand.pt", "https://img.bertrand.pt"],
+  "requireAuthorEvidence": true
+}

@@ -114,7 +114,7 @@ public class WookMetadataTests
     private static WookBookFetcher CreateFetcher(FetcherOptions options) =>
         new(FrameworkOptions.Create(options), FrameworkOptions.Create(new PlaywrightOptions()), NullLogger<WookBookFetcher>.Instance);
 
-    private static string ProductHtml(string isbn) => $"""
+    internal static string ProductHtml(string isbn) => $"""
         <!-- https://example.invalid/product -->
         <div class="flex">
           <table>

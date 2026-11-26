@@ -6,6 +6,7 @@ using System.Text.Json;
 
 namespace Bibliotheca.Backend.Fetchers;
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("goodreads")]
 public class GoodReadsBookFetcher : PlaywrightFetcher, IBookFetcher, IFetcherPriority
 {
     private readonly IOptions<FetcherOptions> _options;

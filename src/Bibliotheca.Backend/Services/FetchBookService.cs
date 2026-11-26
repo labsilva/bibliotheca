@@ -1,4 +1,4 @@
-﻿using Bibliotheca.Backend.Fetchers;
+using Bibliotheca.Backend.Fetchers;
 
 namespace Bibliotheca.Backend.Services;
 
@@ -26,7 +26,7 @@ public class FetchBookService : FetcherBaseService, IServiceExecutor<FetchBookSe
         foreach (var bookFetcher in fetchers)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var fetcherName = bookFetcher.GetType().Name;
+            var fetcherName = bookFetcher is Extractors.JavaScriptExtractorFetcher extractor ? extractor.Id : bookFetcher.GetType().Name;
             _logger.LogInformation("Trying {fetcher}", fetcherName);
             try
             {
@@ -36,6 +36,7 @@ public class FetchBookService : FetcherBaseService, IServiceExecutor<FetchBookSe
                     _logger.LogInformation("Book fetched from {fetcher}", fetcherName);
                     break;
                 }
+                _logger.LogInformation("No book returned by {fetcher}", fetcherName);
             }
             catch (Exception ex)
             {

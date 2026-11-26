@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 
 namespace Bibliotheca.Backend.Fetchers;
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("wook")]
 public class WookBookFetcher : PlaywrightFetcher, IBookFetcher, IFetcherPriority
 {
     private readonly IOptions<FetcherOptions> _options;

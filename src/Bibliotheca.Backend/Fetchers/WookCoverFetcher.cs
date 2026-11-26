@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Bibliotheca.Backend.Fetchers;
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("wook")]
 public sealed class WookCoverFetcher(IWookPageReader pages, IWookCoverReader covers, IOptions<FetcherOptions> options) : ICoverFetcher, IFetcherPriority
 {
     private const int CandidateLimit = 5;

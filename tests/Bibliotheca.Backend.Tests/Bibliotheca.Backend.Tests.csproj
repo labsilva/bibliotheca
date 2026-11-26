@@ -21,6 +21,12 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <None Include="../../extractors/bertrand/*" Link="extractor-fixture/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../extractors/amazon/*" Link="provider-fixtures/amazon/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../extractors/isbndb/*" Link="provider-fixtures/isbndb/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../extractors/hardcover/*" Link="provider-fixtures/hardcover/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../extractors/goodreads/*" Link="provider-fixtures/goodreads/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../extractors/wook/*" Link="provider-fixtures/wook/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

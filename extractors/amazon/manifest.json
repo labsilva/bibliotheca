@@ -1,0 +1,8 @@
+{
+  "id": "amazon",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["cover"],
+  "navigationOrigins": ["https://www.amazon.com"],
+  "resourceOrigins": ["https://m.media-amazon.com", "https://images-na.ssl-images-amazon.com"]
+}

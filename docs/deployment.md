@@ -283,6 +283,11 @@ Run both topologies on native amd64 and arm64. These runtime checks require a
 working Docker daemon and real certificates; passing Node tests alone does not
 validate them.
 
+## JavaScript extractors
+
+See [JavaScript extractors](javascript-extractors.md) for the Bertrand pilot,
+including the bind mount, approved origins, and update and rollback steps.
+
 ## Mounted certificate passwords
 
 The combined Compose example uses file-backed Compose secrets, keeping password

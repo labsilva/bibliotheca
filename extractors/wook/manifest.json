@@ -1,0 +1,9 @@
+{
+  "id": "wook",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["metadata", "cover", "authorBiography", "editionSearch", "editionResolve"],
+  "navigationOrigins": ["https://www.wook.pt"],
+  "resourceOrigins": ["https://www.wook.pt", "https://img.wook.pt"],
+  "requireAuthorEvidence": true
+}

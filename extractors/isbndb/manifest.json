@@ -1,0 +1,8 @@
+{
+  "id": "isbndb",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["cover"],
+  "navigationOrigins": ["https://isbndb.com"],
+  "resourceOrigins": ["https://isbndb.com", "https://images.isbndb.com"]
+}

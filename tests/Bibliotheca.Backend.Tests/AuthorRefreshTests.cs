@@ -1,3 +1,4 @@
+using Bibliotheca.Backend.Extractors;
 using Bibliotheca.Backend.Controllers;
 using Bibliotheca.Backend.Data;
 using Bibliotheca.Backend.Fetchers;
@@ -229,6 +230,42 @@ public class AuthorRefreshTests
         Assert.Equal("new.jpg", stored.PhotoUrl);
         Assert.Equal("https://www.wook.pt/autor/linked-author/123", stored.BiographySourceUrl);
         Assert.True(stored.Biography!.Length >= 100);
+    }
+
+    [Fact]
+    public async Task WorkerPersistsValidatedBiographyAndKeepsWookPhoto()
+    {
+        await using var database = await TestDatabase.CreateDatabaseAsync();
+        var author = new Author { AuthorName = "Linked author" };
+        database.Books.Add(NewBook("Unavailable edition", "9780140328721", author));
+        await database.SaveChangesAsync();
+        await Controller(database).Start(default);
+        var options = new DbContextOptionsBuilder<BibliothecaDbContext>().UseSqlite(database.Database.GetDbConnection())
+            .AddInterceptors(new DiacriticsInterceptor()).Options;
+        await using var services = new ServiceCollection().AddScoped(_ => new BibliothecaDbContext(options))
+            .AddSingleton<IAuthorProfileLookup>(new ProfileLookup()).AddSingleton<IWookAuthorLookup>(new WookProfile())
+            .AddSingleton<IAuthorBiographyLookup>(new BiographyFixture()).BuildServiceProvider();
+
+        Assert.True(await Worker(services).ProcessNextAsync(default));
+
+        var stored = await database.Authors.AsNoTracking().SingleAsync();
+        Assert.Equal("Biography from JavaScript", stored.Biography);
+        Assert.Equal("https://www.wook.pt/autor/linked-author/42", stored.BiographySourceUrl);
+        Assert.Equal("https://img.wook.pt/author.jpg", stored.PhotoUrl);
+    }
+
+    private sealed class BiographyFixture : IAuthorBiographyLookup
+    {
+        public string Id => "wook";
+
+        public Task<AuthorBiographyResult?> FindAsync(string name, IReadOnlyList<AuthorBiographyEdition> editions,
+            CancellationToken token)
+        {
+            Assert.Equal("Linked author", name);
+            Assert.Equal("9780140328721", Assert.Single(editions).Isbn);
+            return Task.FromResult<AuthorBiographyResult?>(new("Biography from JavaScript",
+                "https://www.wook.pt/autor/linked-author/42"));
+        }
     }
 
     private sealed class WookProfile : IWookAuthorLookup

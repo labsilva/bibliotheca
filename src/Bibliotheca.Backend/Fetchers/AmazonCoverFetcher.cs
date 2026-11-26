@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 
 namespace Bibliotheca.Backend.Fetchers;
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("amazon")]
 public class AmazonCoverFetcher : PlaywrightFetcher, ICoverFetcher, IFetcherPriority
 {
     private readonly CoverDownloader _downloader;

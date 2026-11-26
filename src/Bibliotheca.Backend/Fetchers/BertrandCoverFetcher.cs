@@ -37,24 +37,7 @@ public sealed class BertrandReader(IOptions<PlaywrightOptions> options) : Playwr
         if (response is null || response.Status >= 400 || page.Url != product.AbsoluteUri) return new FetchedCover { Success = false };
         var parsed = BertrandCatalogue.Parse(await page.ContentAsync(), product, isbn);
         if (parsed?.Image is not { } image || !BertrandCatalogue.IsSite(image)) return new FetchedCover { Success = false };
-        // Fetch in the page context, with a streaming limit and without following redirects.
-        var result = await page.EvaluateAsync<JsonElement>("""
-            async ({url, limit}) => {
-              const response = await fetch(url, {credentials: 'include', redirect: 'error'});
-              const type = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
-              if (!response.ok || !['image/jpeg','image/png','image/webp','image/gif','image/avif'].includes(type) ||
-                  Number(response.headers.get('content-length')) > limit || !response.body) return null;
-              const reader = response.body.getReader(); let chunks = [], size = 0;
-              while (true) { const {value, done} = await reader.read(); if (done) break;
-                size += value.length; if (size > limit) { await reader.cancel(); return null; } chunks.push(value); }
-              if (!size) return null; let data = '';
-              for (const chunk of chunks) for (let i = 0; i < chunk.length; i += 8192)
-                data += String.fromCharCode(...chunk.subarray(i, i + 8192));
-              return {type, data: btoa(data)};
-            }
-            """, new { url = image.AbsoluteUri, limit = CoverDownloader.MaxCoverBytes });
-        if (result.ValueKind != JsonValueKind.Object) return new FetchedCover { Success = false };
-        return new FetchedCover { Success = true, Url = image.AbsoluteUri, MimeType = result.GetProperty("type").GetString()!, Image = Convert.FromBase64String(result.GetProperty("data").GetString()!) };
+        return await CoverDownloader.DownloadInPageAsync(page, image.AbsoluteUri);
     }, token);
 }
 
@@ -136,12 +119,14 @@ public sealed class BertrandCatalogueLookup(IBertrandReader reader, ILogger<Bert
     }
 }
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("bertrand")]
 public sealed class BertrandBookFetcher(BertrandCatalogueLookup lookup) : IBookFetcher, IFetcherPriority
 {
     public int Priority => 6;
     public async Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken cancellationToken) =>
         (await lookup.FindAsync(isbn, cancellationToken))?.Book ?? new FetchedBook { Success = false };
 }
+[Bibliotheca.Backend.Extractors.ExtractorProvider("bertrand")]
 public sealed class BertrandCoverFetcher(BertrandCatalogueLookup lookup, IBertrandReader reader) : ICoverFetcher, IFetcherPriority
 {
     public int Priority => 6;

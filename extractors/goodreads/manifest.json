@@ -1,0 +1,10 @@
+{
+  "id": "goodreads",
+  "contractVersion": 1,
+  "entry": "extract.js",
+  "operations": ["metadata", "cover", "authorBiography"],
+  "navigationOrigins": ["https://www.goodreads.com"],
+  "resourceOrigins": ["https://www.goodreads.com"],
+  "optionalResourceOrigins": ["https://images-na.ssl-images-amazon.com", "https://i.gr-assets.com"],
+  "requireAuthorEvidence": true
+}

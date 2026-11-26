@@ -46,7 +46,7 @@ public class JavaScriptExtractorTests
     public async Task PendingPromiseHonorsDeadline()
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ExtractorRuntime.EvaluateAsync(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => JintExtractorExecutor.EvaluateAsync(
             "async function extract() { await new Promise(() => {}); }", "metadata", Isbn,
             (_, _, _) => throw new InvalidOperationException(), deadline.Token));
     }
@@ -55,7 +55,7 @@ public class JavaScriptExtractorTests
     public async Task JintMemoryLimitStillAppliesAfterAnAsynchronousHostCall()
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await Assert.ThrowsAsync<Jint.Runtime.MemoryLimitExceededException>(() => ExtractorRuntime.EvaluateAsync(
+        await Assert.ThrowsAsync<Jint.Runtime.MemoryLimitExceededException>(() => JintExtractorExecutor.EvaluateAsync(
             """
             async function extract(host) {
                 await host.goto("https://www.bertrand.pt/");
@@ -66,7 +66,7 @@ public class JavaScriptExtractorTests
             {
                 await Task.Yield();
                 return "null";
-            }, deadline.Token));
+            }, deadline.Token, hostBindings: ExtractorSession.HostBindings));
     }
 
     [Fact]
@@ -89,13 +89,13 @@ public class JavaScriptExtractorTests
             };
             File.WriteAllText(script, "first");
             var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
-            var first = Assert.Single(ExtractorDefinition.Load(config, root.FullName));
+            var first = Assert.Single(ExtractorCatalog.Load(config, root.FullName));
             File.WriteAllText(script, "second");
-            var second = Assert.Single(ExtractorDefinition.Load(config, root.FullName));
+            var second = Assert.Single(ExtractorCatalog.Load(config, root.FullName));
             Assert.Equal("first", first.Script);
             Assert.Equal("second", second.Script);
             config["Providers:bertrand:ResourceOrigins:0"] = "https://other.example";
-            Assert.Throws<InvalidDataException>(() => ExtractorDefinition.Load(config, root.FullName));
+            Assert.Throws<InvalidDataException>(() => ExtractorCatalog.Load(config, root.FullName));
         }
         finally { root.Delete(recursive: true); }
     }
@@ -355,7 +355,7 @@ public class JavaScriptExtractorTests
                 [$"Providers:{id}:ResourceOrigins:0"] = cdn,
                 [$"Providers:{id}:ResourceOrigins:1"] = id == "amazon" ? "https://images-na.ssl-images-amazon.com" : origin
             }).Build();
-            var definition = Assert.Single(ExtractorDefinition.Load(configuration, AppContext.BaseDirectory));
+            var definition = Assert.Single(ExtractorCatalog.Load(configuration, AppContext.BaseDirectory));
             Assert.Equal(id == "amazon" ? 2 : 100, definition.Priority);
             var fetcher = new JavaScriptExtractorFetcher(definition, runtime);
             var cover = await fetcher.FetchCoverAsync(isbn, default);
@@ -494,7 +494,7 @@ public class JavaScriptExtractorTests
             ["Providers:wook:ResourceOrigins:0"] = origin,
             ["Providers:wook:ResourceOrigins:1"] = imageOrigin
         }).Build();
-        var definition = Assert.Single(ExtractorDefinition.Load(configuration, AppContext.BaseDirectory));
+        var definition = Assert.Single(ExtractorCatalog.Load(configuration, AppContext.BaseDirectory));
         Assert.Equal(5, definition.Priority);
         Assert.Equal(0, definition.CoverPriority);
         var requests = new List<string>();
@@ -692,7 +692,7 @@ public class JavaScriptExtractorTests
     {
         public async Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken token)
         {
-            var output = await ExtractorRuntime.EvaluateAsync(
+            var output = await JintExtractorExecutor.EvaluateAsync(
                 "async function extract() { return " + json + "; }", "metadata", isbn,
                 (_, _, _) => throw new InvalidOperationException(), token);
             return ExtractorResult.Parse(output, isbn, new(Product), null)!.ToBook();

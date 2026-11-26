@@ -4,6 +4,19 @@ Bibliotheca loads enabled extractors when the API starts. The Bertrand pilot sup
 book metadata and covers by ISBN. Author refresh continues to use the existing
 provider. If no JavaScript extractor is enabled, the existing fetchers are used.
 
+## Package discovery
+
+Install each provider in an immediate subdirectory of the configured
+extractor directory. The directory name matches the manifest ID. The
+manifest and entry script live at the package root. A package may also
+include a README for provider-specific setup and validation.
+
+The backend inventories installed manifests at startup and loads only
+enabled packages. A missing or invalid enabled package fails startup
+with a configuration error. Capabilities and deployment priorities
+determine which adapters are registered for the package. Packages
+with an authenticated API use a backend-approved connector.
+
 ## Install the Bertrand extractor
 
 Mount the repository's `extractors` directory read-only at `/app/extractors`.

@@ -119,12 +119,14 @@ public sealed class BertrandCatalogueLookup(IBertrandReader reader, ILogger<Bert
     }
 }
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("bertrand")]
 public sealed class BertrandBookFetcher(BertrandCatalogueLookup lookup) : IBookFetcher, IFetcherPriority
 {
     public int Priority => 6;
     public async Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken cancellationToken) =>
         (await lookup.FindAsync(isbn, cancellationToken))?.Book ?? new FetchedBook { Success = false };
 }
+[Bibliotheca.Backend.Extractors.ExtractorProvider("bertrand")]
 public sealed class BertrandCoverFetcher(BertrandCatalogueLookup lookup, IBertrandReader reader) : ICoverFetcher, IFetcherPriority
 {
     public int Priority => 6;

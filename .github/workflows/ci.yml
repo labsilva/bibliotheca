@@ -33,7 +33,12 @@ jobs:
       - name: Restore and audit NuGet dependencies
         run: dotnet restore Bibliotheca.slnx -p:NuGetAudit=true -p:NuGetAuditMode=all -warnaserror:NU1900,NU1903,NU1904
       - run: dotnet build Bibliotheca.slnx --no-restore --configuration Release
+      - name: Install Chromium for extractor fixtures
+        shell: pwsh
+        run: ./tests/Bibliotheca.Backend.Tests/bin/Release/net11.0/playwright.ps1 install --with-deps chromium
       - run: dotnet test Bibliotheca.slnx --no-build --configuration Release
+        env:
+          BIBLIOTHECA_EXTRACTOR_BROWSER_TESTS: "1"
 
   frontend:
     runs-on: ubuntu-latest

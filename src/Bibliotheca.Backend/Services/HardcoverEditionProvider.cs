@@ -14,6 +14,7 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, Extra
     : IExternalEditionProvider, IExternalEditionResolver, IDisposable
 {
     public const string ProviderId = "hardcover";
+    private const string HostBindings = """hardcover: async action => parse(await call("hardcover", action, ""))""";
     private const string Endpoint = "https://api.hardcover.app/v1/graphql";
     private const string SearchQuery = """
         query SearchBooks($query: String!, $limit: Int!) {
@@ -81,8 +82,8 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, Extra
         int[] ids = [];
         List<ExternalEdition> candidates = [];
         var stage = 0;
-        var json = await ExtractorRuntime.EvaluateAsync(extractor!.Script, "editionSearch", "", CallAsync, token,
-            ProviderId, logger);
+        var json = await JintExtractorExecutor.EvaluateAsync(extractor!.Script, "editionSearch", "", CallAsync, token,
+            ProviderId, logger, hostBindings: HostBindings);
         var selection = JsonSerializer.Deserialize<int[]>(json);
         if ((Volatile.Read(ref stage) != 4 && (Volatile.Read(ref stage) != 2 || ids.Length != 0)) ||
             selection is null || selection.Length > candidates.Count ||
@@ -154,8 +155,8 @@ internal sealed class HardcoverEditionProvider(IHttpClientFactory clients, Extra
 
         ExternalEdition? edition = null;
         var called = 0;
-        var json = await ExtractorRuntime.EvaluateAsync(extractor.Script, "editionResolve", "", CallAsync,
-            cancellationToken, ProviderId, logger);
+        var json = await JintExtractorExecutor.EvaluateAsync(extractor.Script, "editionResolve", "", CallAsync,
+            cancellationToken, ProviderId, logger, hostBindings: HostBindings);
         var selection = JsonSerializer.Deserialize<int?>(json);
         if (Volatile.Read(ref called) != 2 || selection != (edition is null ? null : (int?)id))
             throw new InvalidDataException("Hardcover extractor resolved an invalid edition.");

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace Bibliotheca.Backend.Fetchers;
 
+[Bibliotheca.Backend.Extractors.ExtractorProvider("isbndb")]
 public class IsbndbCoverFetcher : PlaywrightFetcher, ICoverFetcher
 {
     private readonly CoverDownloader _downloader;

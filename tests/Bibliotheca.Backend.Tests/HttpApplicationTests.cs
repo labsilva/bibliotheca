@@ -12,6 +12,7 @@ using System.Text;
 using System.Text.Json;
 using Bibliotheca.Backend.Data;
 using Bibliotheca.Backend.Fetchers;
+using Bibliotheca.Backend.Extractors;
 using Bibliotheca.Backend.Jobs;
 using Bibliotheca.Backend.Services;
 using Microsoft.AspNetCore.Hosting;
@@ -388,6 +389,56 @@ public partial class HttpApplicationTests(Xunit.Abstractions.ITestOutputHelper o
         {
             directory.Delete(recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task InstalledExtractorPackageRegistersItsCapabilityInTheContainer()
+    {
+        var directory = Directory.CreateTempSubdirectory("bibliotheca-extractor-catalog-");
+        try
+        {
+            var root = directory.CreateSubdirectory("extractors");
+            var fixture = root.CreateSubdirectory("fixture");
+            await File.WriteAllTextAsync(Path.Combine(fixture.FullName, "manifest.json"), """
+                {"id":"fixture","contractVersion":1,"entry":"extract.js","operations":["metadata"],
+                 "navigationOrigins":["https://fixture.example"],"resourceOrigins":[]}
+                """);
+            await File.WriteAllTextAsync(Path.Combine(fixture.FullName, "extract.js"), "async function extract() { return null; }");
+            var unused = root.CreateSubdirectory("unused");
+            await File.WriteAllTextAsync(Path.Combine(unused.FullName, "manifest.json"), "invalid and disabled");
+            var wook = root.CreateSubdirectory("wook");
+            await File.WriteAllTextAsync(Path.Combine(wook.FullName, "manifest.json"), """
+                {"id":"wook","contractVersion":1,"entry":"extract.js","operations":["cover"],
+                 "navigationOrigins":["https://www.wook.pt"],"resourceOrigins":[]}
+                """);
+            await File.WriteAllTextAsync(Path.Combine(wook.FullName, "extract.js"), "async function extract() { return null; }");
+
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Extractors:Directory"] = root.FullName,
+                ["Extractors:Providers:fixture:Enabled"] = "true",
+                ["Extractors:Providers:fixture:NavigationOrigins:0"] = "https://fixture.example",
+                ["Extractors:Providers:fixture:Priority"] = "4",
+                ["Extractors:Providers:wook:Enabled"] = "true",
+                ["Extractors:Providers:wook:NavigationOrigins:0"] = "https://www.wook.pt"
+            }).Build();
+            await using var services = new ServiceCollection()
+                .AddLogging().AddOptions()
+                .AddSingleton<IBertrandReader, BertrandReader>().AddSingleton<BertrandCatalogueLookup>()
+                .AddExtractors(configuration, directory.FullName)
+                .BuildServiceProvider();
+            var extractor = services.GetRequiredKeyedService<IExtractor>("fixture");
+            Assert.Null(services.GetKeyedService<IExtractor>("unused"));
+            Assert.Equal("fixture", extractor.Definition.Manifest.Id);
+
+            var metadata = services.GetServices<IBookFetcher>().ToArray();
+            var covers = services.GetServices<ICoverFetcher>().ToArray();
+            Assert.Contains(metadata, fetcher => fetcher is WookBookFetcher);
+            Assert.DoesNotContain(covers, fetcher => fetcher is WookCoverFetcher);
+            Assert.Equal(4, Assert.Single(metadata.OfType<JavaScriptExtractorFetcher>()).Priority);
+            Assert.Equal(0, Assert.Single(covers.OfType<JavaScriptExtractorFetcher>()).Priority);
+        }
+        finally { directory.Delete(recursive: true); }
     }
 
     [Fact]

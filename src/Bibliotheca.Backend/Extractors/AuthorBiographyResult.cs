@@ -71,10 +71,13 @@ internal interface IAuthorBiographyLookup
     Task<AuthorBiographyResult?> FindAsync(string name, IReadOnlyList<AuthorBiographyEdition> editions, CancellationToken token);
 }
 
-internal sealed class JavaScriptAuthorBiographyLookup(ExtractorDefinition definition, ExtractorRuntime runtime)
+internal sealed class JavaScriptAuthorBiographyLookup(IExtractor extractor)
     : IAuthorBiographyLookup
 {
-    public string Id => definition.Manifest.Id;
+    internal JavaScriptAuthorBiographyLookup(ExtractorDefinition definition, ExtractorRuntime runtime)
+        : this(new JavaScriptExtractor(definition, runtime)) { }
+
+    public string Id => extractor.Definition.Manifest.Id;
 
     public Task<AuthorBiographyResult?> FindAsync(string name, IReadOnlyList<AuthorBiographyEdition> editions, CancellationToken token)
     {
@@ -83,6 +86,6 @@ internal sealed class JavaScriptAuthorBiographyLookup(ExtractorDefinition defini
             Id == "wook" && edition.ExternalId is { Length: > 0 and <= 256 } ? edition.ExternalId : null))
             .Where(edition => edition.Isbn is not null || edition.ExternalId is not null).Distinct().Take(3).ToArray();
         return candidates.Length == 0 ? Task.FromResult<AuthorBiographyResult?>(null) :
-            runtime.RunAuthorAsync(definition, new(name, candidates), token);
+            extractor.ExtractAuthorAsync(new(name, candidates), token);
     }
 }

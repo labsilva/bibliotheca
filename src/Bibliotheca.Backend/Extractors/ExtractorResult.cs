@@ -63,11 +63,14 @@ internal sealed record ExtractorResult(string Isbn, string Title, string[]? Auth
     }
 }
 
-internal sealed class JavaScriptExtractorFetcher(ExtractorDefinition definition, ExtractorRuntime runtime)
+internal sealed class JavaScriptExtractorFetcher(IExtractor extractor, int priority)
     : IBookFetcher, ICoverFetcher, IFetcherPriority
 {
-    public int Priority => definition.Priority;
-    internal string Id => definition.Manifest.Id;
+    internal JavaScriptExtractorFetcher(ExtractorDefinition definition, ExtractorRuntime runtime)
+        : this(new JavaScriptExtractor(definition, runtime), definition.Priority) { }
+
+    public int Priority => priority;
+    internal string Id => extractor.Definition.Manifest.Id;
 
     public async Task<FetchedBook> FetchBookAsync(string isbn, CancellationToken token) =>
         (await RunAsync("metadata", isbn, token))?.ToBook() ?? new() { Success = false };
@@ -77,6 +80,6 @@ internal sealed class JavaScriptExtractorFetcher(ExtractorDefinition definition,
 
     private Task<ExtractorResult?> RunAsync(string operation, string isbn, CancellationToken token) =>
         EditionIsbn.Normalize(isbn) is { } normalized
-            ? runtime.RunAsync(definition, operation, normalized, token)
+            ? extractor.ExtractBookAsync(operation, normalized, token)
             : Task.FromResult<ExtractorResult?>(null);
 }
